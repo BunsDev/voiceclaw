@@ -27,8 +27,18 @@
 import { NodeSDK } from "@opentelemetry/sdk-node"
 import { LangfuseSpanProcessor } from "@langfuse/otel"
 import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http"
+import { resourceFromAttributes } from "@opentelemetry/resources"
 import { BatchSpanProcessor, type SpanProcessor } from "@opentelemetry/sdk-trace-base"
+import { execSync } from "node:child_process"
+import { readFileSync } from "node:fs"
+import { dirname, resolve } from "node:path"
+import { fileURLToPath } from "node:url"
 import { log, error as logError } from "../log.js"
+
+const MODULE_DIR = dirname(fileURLToPath(import.meta.url))
+const SERVICE_VERSION = readServiceVersion()
+const GIT_SHA = readGitShaSync()
+const GIT_BRANCH = readGitBranchSync()
 
 let sdk: NodeSDK | null = null
 let enabled = false
@@ -42,9 +52,7 @@ export function initLangfuse() {
 
   try {
     sdk = new NodeSDK({
-      // Named so Langfuse / any OTel consumer can distinguish relay-emitted
-      // spans from openclaw-emitted spans in the same unified trace.
-      serviceName: process.env.OTEL_SERVICE_NAME ?? "voiceclaw-relay",
+      resource: buildResource(),
       spanProcessors: processors,
     })
     sdk.start()
@@ -70,6 +78,17 @@ export async function shutdownLangfuse() {
   } catch (err) {
     logError(`[tracing] shutdown error: ${(err as Error).message}`)
   }
+}
+
+function buildResource() {
+  const attrs: Record<string, string> = {
+    "service.name": process.env.OTEL_SERVICE_NAME ?? "voiceclaw-relay",
+    "deployment.environment": process.env.NODE_ENV ?? "development",
+  }
+  if (SERVICE_VERSION) attrs["service.version"] = SERVICE_VERSION
+  if (GIT_SHA) attrs["vcs.git.sha"] = GIT_SHA
+  if (GIT_BRANCH) attrs["vcs.git.branch"] = GIT_BRANCH
+  return resourceFromAttributes(attrs)
 }
 
 function buildSpanProcessors(): SpanProcessor[] {
@@ -102,5 +121,33 @@ function tryBuildCollectorProcessor(): SpanProcessor | null {
   } catch (err) {
     logError(`[tracing] failed to init collector exporter at ${url}: ${(err as Error).message}`)
     return null
+  }
+}
+
+function readServiceVersion(): string {
+  const fromEnv = process.env.RELAY_VERSION?.trim()
+  if (fromEnv) return fromEnv
+  try {
+    const pkgPath = resolve(MODULE_DIR, "..", "..", "package.json")
+    const pkg = JSON.parse(readFileSync(pkgPath, "utf8")) as { version?: string }
+    return pkg.version ?? ""
+  } catch {
+    return ""
+  }
+}
+
+function readGitShaSync(): string {
+  try {
+    return execSync("git rev-parse HEAD", { cwd: MODULE_DIR, stdio: ["ignore", "pipe", "ignore"] }).toString().trim()
+  } catch {
+    return process.env.GIT_SHA?.trim() ?? ""
+  }
+}
+
+function readGitBranchSync(): string {
+  try {
+    return execSync("git rev-parse --abbrev-ref HEAD", { cwd: MODULE_DIR, stdio: ["ignore", "pipe", "ignore"] }).toString().trim()
+  } catch {
+    return process.env.GIT_BRANCH?.trim() ?? ""
   }
 }
