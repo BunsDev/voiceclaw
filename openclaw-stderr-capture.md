@@ -90,39 +90,45 @@ The change is in three places, all in
    No change here — already the case via `const stderr = result.stderr.trim()`
    at line 456.
 
-2. **In the parsed-output path (line 522)**: after `parseCliOutput(...)`
-   returns, inspect the parsed envelope for `is_error === true` (or any
-   recognised error subtype like `error_during_execution`). When that's true:
-   - Attach a bounded `stderr_excerpt` field to the structured result envelope
-     returned upward. Cap at 2 KiB. Suffix with `... [truncated]` if cut.
-   - Log the **full** stderr (uncapped, but with control-character scrubbing —
-     see edge cases) at `cliBackendLog.warn` level, correlated with the
-     `session_id` from the envelope and the supervisor `pid`. This lands in
-     `gateway.err.log` without needing the env-gated verbose flag.
-   - Promote the resulting failover reason from `unknown` to whatever
-     `classifyFailoverReason(stderr_excerpt, { provider })` returns; today
-     classification only sees the empty envelope text and falls through to
-     `unknown` (see `pi-embedded-helpers/failover-matches.ts:126`).
+2. **In the clean-exit path (line 522)**: do **not** rely on `parseCliOutput`
+   to surface `is_error`. `parseCliOutput` returns the closed `CliOutput`
+   shape (`text`, `rawText?`, `sessionId?`, `usage?`, `finalPromptText?` —
+   `src/agents/cli-output.ts:14-20`); it strips error metadata. Detect the
+   failure on raw stdout **before** parsing by calling the existing
+   `extractCliErrorMessage(stdout)` helper (`cli-output.ts:494`), which
+   walks JSONL records and returns text behind any `is_error`/`type:error`
+   envelope. When it returns non-null, treat the run as failed and reuse
+   the same `FailoverError` construction as the non-zero-exit branch — with
+   `stderr_excerpt` populated from `result.stderr` (or the explicit error
+   text when stderr is empty), full stderr logged at `cliBackendLog.warn`
+   (control-chars scrubbed, correlated with the envelope `session_id` and
+   supervisor `pid`), and reason promoted via
+   `classifyFailoverReason(stderrText || explicitCliError, { provider })`.
 
 3. **In the non-zero-exit path (lines 474-519)**: this branch already uses
-   `stderr` correctly. Add the same `stderr_excerpt` field to the
-   `FailoverError` payload so it propagates to gateway-level logging in the
-   same shape. The `cliBackendLog.warn` line for `result.exitCode !== 0`
-   should also log the bounded excerpt verbatim (not via
-   `extractCliErrorMessage`) so the raw text is in `gateway.err.log` for
-   forensics.
+   `stderr` correctly. Add a `stderr_excerpt` field to the `FailoverError`
+   payload so it propagates to gateway logging, and log the bounded excerpt
+   verbatim from the `cliBackendLog.warn` line (not via
+   `extractCliErrorMessage`) so raw text lands in `gateway.err.log`.
 
-Shape of the new field on the structured result envelope:
+   `FailoverError`'s constructor takes a **closed typed payload**
+   (`reason | provider | model | profileId | status | code | cause` —
+   `src/agents/failover-error.ts:20-30`). Adding `stderr_excerpt` to a
+   `new FailoverError(...)` call without extending the type fails `tsgo`
+   strict excess-property checking. Three coordinated edits in
+   `src/agents/failover-error.ts`:
 
-```ts
-{
-  // ... existing CliOutput fields ...
-  stderr_excerpt?: string  // up to 2048 bytes, control chars scrubbed
-}
-```
-
-Bounded by design: 2 KiB on the in-result excerpt, full stderr only to disk
-log (which already rotates).
+   - Add `stderr_excerpt?: string` to the constructor params object (lines
+     22-30) plus a matching `readonly stderr_excerpt?: string` field, and
+     assign it in the body (cap at 2 KiB before assignment, control-chars
+     scrubbed — see edge cases).
+   - Update `describeFailoverError()` (lines 276-298) — the function the
+     gateway logging path reads from (`model-fallback.ts:238`,
+     `pi-embedded-runner/run.ts:1251-1252`) — to include `stderr_excerpt`
+     in both branches. Without this step the new field is set on the error
+     but never reaches `gateway.err.log`.
+   - Update `coerceToFailoverError()` (lines 300-330) so non-FailoverError
+     callers can pass `stderr_excerpt` through `context`.
 
 ## 5. Edge cases
 
@@ -169,12 +175,24 @@ Fixture: a fake `managedRun.wait()` returning:
 
 Assertions:
 
-1. The structured result envelope returned from the runner contains
-   `stderr_excerpt: "auth expired"`.
+1. The runner throws a `FailoverError` (rather than returning a `CliOutput`)
+   whose `stderr_excerpt` is `"auth expired"` and whose `describeFailoverError`
+   output includes `stderr_excerpt: "auth expired"`.
 2. `cliBackendLog.warn` is called once with a message containing
    `auth expired` and the session id `fa13ed62-test`.
-3. The failover reason is no longer `unknown` for inputs containing known
-   markers (`auth expired`, `command not found`, etc.).
+3. The failover reason is no longer `unknown` when stderr contains markers
+   that `classifyFailoverReason` already recognises. Cover at least:
+   - `"auth expired"` / `"401 unauthorized"` / `"invalid_api_key"` →
+     `"auth"` (or `"auth_permanent"` for 403)
+   - `"429 too many requests"` / `"rate limit"` → `"rate_limit"`
+   - `"insufficient credits"` / `"insufficient_quota"` → `"billing"`
+   - `"connection reset by peer"` / `"ETIMEDOUT"` → `"timeout"`
+
+   `"command not found"` / `ENOENT` are intentionally **not** asserted —
+   `classifyFailoverReason` does not recognise them today, so they would
+   still fall through to `unknown` and that's a separate ticket. Listing
+   the markers explicitly keeps this assertion from silently passing if
+   classification regresses.
 
 Smoke test under `OPENCLAW_LIVE_TEST=1`: point a `cli-backend` config at a
 fake `claude` shim that does
