@@ -314,7 +314,8 @@ export class RelaySession {
 
       this.tracer.endToolCall(callId, result)
 
-      // Inject the result back into the conversation so Gemini speaks it
+      this.send({ type: "brain.result", callId, query, result })
+
       this.adapter?.injectContext(
         `[Brain agent result for query: "${query}"]\n${result}\n\nPlease share this information with the user naturally.`
       )
@@ -325,6 +326,7 @@ export class RelaySession {
       this.tracer.endToolCall(callId, JSON.stringify({ error: message }), message)
 
       if (!controller.signal.aborted) {
+        this.send({ type: "brain.result", callId, query, error: message })
         this.adapter?.injectContext(
           `[Brain agent failed for query: "${query}": ${message}]\nLet the user know the search didn't work and offer to try again.`
         )

@@ -110,6 +110,7 @@ export type RelayEvent =
   | UsageMetricsEvent
   | LatencyMetricsEvent
   | ToolCancelledEvent
+  | BrainResultEvent
   | ErrorEvent
 
 export interface SessionReadyEvent {
@@ -227,6 +228,19 @@ export interface LatencyMetricsEvent {
 export interface ToolCancelledEvent {
   type: "tool.cancelled"
   callIds: string[]
+}
+
+// Raw brain agent answer surfaced to the client as soon as it returns,
+// independent of whether the realtime model successfully speaks it. The client
+// persists this directly into local conversation history so the structured
+// response survives provider drops mid-injection and isn't degraded to the
+// model's spoken paraphrase across cross-session loads.
+export interface BrainResultEvent {
+  type: "brain.result"
+  callId: string
+  query: string
+  result?: string
+  error?: string
 }
 
 export interface ErrorEvent {

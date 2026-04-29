@@ -173,6 +173,15 @@ export function ChatPage() {
       setStreamingRole('assistant')
       setStreamingText(summary)
     },
+    onBrainResult: async (_callId, query, result, error) => {
+      const body = error
+        ? `[Brain] Failed for "${query}": ${error}`
+        : `[Brain] ${result ?? ''}`
+      if (!body.trim()) return
+      const convId = await ensureConversation()
+      await addMessage(convId, 'assistant', body)
+      await loadMessages()
+    },
     onSessionEnded: () => {
       setIsCallActive(false)
       setIsThinking(false)
