@@ -17,6 +17,7 @@ import { buildInstructions } from "./instructions.js"
 import { log, error as logError } from "./log.js"
 import { TurnTracer } from "./tracing/turn-tracer.js"
 import { MediaCapture } from "./media/capture.js"
+import { trackBackgroundTask } from "./shutdown.js"
 const SERVER_SIDE_TOOLS = new Set(["echo_tool", "ask_brain", "web_search"])
 
 export class RelaySession {
@@ -37,10 +38,12 @@ export class RelaySession {
   constructor(ws: WebSocket) {
     this.ws = ws
     this.ws.on("message", (raw) => this.handleMessage(raw))
-    this.ws.on("close", () => this.cleanup())
+    this.ws.on("close", () => {
+      trackBackgroundTask(this.cleanup(), `session-cleanup:${this.id}`)
+    })
     this.ws.on("error", (err) => {
       logError(`[session:${this.id}] WebSocket error:`, err.message)
-      this.cleanup()
+      trackBackgroundTask(this.cleanup(), `session-cleanup:${this.id}`)
     })
     log(`[session:${this.id}] Client connected`)
   }
@@ -80,7 +83,10 @@ export class RelaySession {
         // finalize (which races against the next turn starting) can target
         // the correct voice-turn span via attachMediaAttrs(attrs, turnId).
         const endingTurnId = this.tracer.getActiveTurnId()
-        void this.finalizeMediaTurn(endingTurnId)
+        trackBackgroundTask(
+          this.finalizeMediaTurn(endingTurnId),
+          `media-finalize:${this.id}:${endingTurnId ?? "unknown"}`,
+        )
         this.tracer.endTurn()
         break
       }
@@ -569,13 +575,12 @@ export class RelaySession {
       input: prompt,
     })
 
-    // Fire-and-forget with bounded retries — gateway may be busy with the
-    // tail of an ask_brain call that hadn't finished when the session ended.
-    void context.with(bg.ctx, () =>
+    const syncPromise = context.with(bg.ctx, () =>
       retryTranscriptSync({ prompt, gatewayUrl, authToken, sessionKey, sessionId })
         .then((result) => bg.end({ output: result }))
         .catch((err) => bg.end({ error: err instanceof Error ? err.message : String(err) })),
     )
+    trackBackgroundTask(syncPromise, `transcript-sync:${sessionId}`)
   }
 }
 
