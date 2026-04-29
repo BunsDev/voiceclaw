@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { execSync } from "node:child_process"
-import { existsSync, mkdirSync, readdirSync, renameSync, rmSync } from "node:fs"
+import { existsSync, mkdirSync, readdirSync, renameSync, rmSync, statSync } from "node:fs"
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 
@@ -44,14 +44,15 @@ execSync("npm install --omit=dev --no-audit --no-fund --no-package-lock --ignore
   stdio: "inherit",
 })
 
-console.log("[openclaw-bundle] dereferencing .bin symlinks for electron-builder compatibility")
-dropBinSymlinks(stagingDir)
+console.log("[openclaw-bundle] removing broken symlinks for electron-builder compatibility")
+dropBrokenSymlinks(stagingDir)
 
 console.log(`[openclaw-bundle] staged at ${stagingDir}`)
 
-function dropBinSymlinks(root) {
+function dropBrokenSymlinks(root) {
   const queue = [root]
   let removed = 0
+  let kept = 0
   while (queue.length) {
     const dir = queue.pop()
     let entries = []
@@ -63,12 +64,17 @@ function dropBinSymlinks(root) {
     for (const entry of entries) {
       const full = join(dir, entry.name)
       if (entry.isSymbolicLink()) {
-        rmSync(full, { force: true })
-        removed += 1
+        try {
+          statSync(full)
+          kept += 1
+        } catch {
+          rmSync(full, { force: true })
+          removed += 1
+        }
       } else if (entry.isDirectory()) {
         queue.push(full)
       }
     }
   }
-  console.log(`[openclaw-bundle] removed ${removed} symlinks`)
+  console.log(`[openclaw-bundle] removed ${removed} broken symlinks, kept ${kept} valid symlinks`)
 }

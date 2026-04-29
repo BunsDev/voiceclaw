@@ -1,7 +1,15 @@
 {
   "gateway": {
+    "mode": "local",
     "auth": {
-      "mode": "none"
+      "mode": "token"
+    },
+    "http": {
+      "endpoints": {
+        "chatCompletions": {
+          "enabled": true
+        }
+      }
     },
     "tailscale": {}
   }

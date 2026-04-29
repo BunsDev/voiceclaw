@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const isPackagedRef = { value: false }
 const existsRef = { fn: (_p: string) => false as boolean }
+const tokenRef = { value: null as string | null }
+const providerKeysRef = { fn: (_p: 'gemini' | 'openai' | 'xai') => null as string | null }
 let originalResourcesPath: string | undefined
 
 vi.mock('electron', () => ({
@@ -14,6 +16,15 @@ vi.mock('electron', () => ({
 
 vi.mock('fs', () => ({
   existsSync: (path: string) => existsRef.fn(path),
+}))
+
+vi.mock('../provider-keys', () => ({
+  getProviderKey: (provider: 'gemini' | 'openai' | 'xai') => providerKeysRef.fn(provider),
+}))
+
+vi.mock('./openclaw-gateway', () => ({
+  readGatewayAuthToken: (_path: string) => tokenRef.value,
+  getOpenClawConfigPath: () => '/tmp/openclaw.json',
 }))
 
 describe('resolveBundledRelayScript', () => {
@@ -76,5 +87,59 @@ describe('resolveBundledRelayScript', () => {
 
     const { resolveBundledRelayScript } = await import('./relay-server')
     expect(resolveBundledRelayScript()).toBeNull()
+  })
+})
+
+describe('buildRelayEnv', () => {
+  const originalEnv = { ...process.env }
+
+  beforeEach(() => {
+    for (const k of Object.keys(process.env)) delete process.env[k]
+    Object.assign(process.env, originalEnv)
+    delete process.env.GEMINI_API_KEY
+    delete process.env.OPENAI_API_KEY
+    delete process.env.XAI_API_KEY
+    delete process.env.BRAIN_GATEWAY_AUTH_TOKEN
+    delete process.env.RELAY_API_KEY
+    delete process.env.TAVILY_API_KEY
+    tokenRef.value = null
+    providerKeysRef.fn = () => null
+  })
+
+  afterEach(() => {
+    for (const k of Object.keys(process.env)) delete process.env[k]
+    Object.assign(process.env, originalEnv)
+    vi.resetModules()
+  })
+
+  it('forwards provider keys from the keychain when env is empty', async () => {
+    providerKeysRef.fn = (p) => (p === 'gemini' ? 'gemini-secret' : null)
+    const { buildRelayEnv } = await import('./relay-server')
+    const env = buildRelayEnv()
+    expect(env.GEMINI_API_KEY).toBe('gemini-secret')
+    expect(env.OPENAI_API_KEY).toBeUndefined()
+  })
+
+  it('uses keychain as the only source of provider keys (env is not forwarded)', async () => {
+    process.env.GEMINI_API_KEY = 'env-ignored'
+    providerKeysRef.fn = (p) => (p === 'gemini' ? 'keychain-wins' : null)
+    const { buildRelayEnv } = await import('./relay-server')
+    const env = buildRelayEnv()
+    expect(env.GEMINI_API_KEY).toBe('keychain-wins')
+  })
+
+  it('injects BRAIN_GATEWAY_AUTH_TOKEN from the openclaw config when env is empty', async () => {
+    tokenRef.value = 'baked-token'
+    const { buildRelayEnv } = await import('./relay-server')
+    const env = buildRelayEnv()
+    expect(env.BRAIN_GATEWAY_AUTH_TOKEN).toBe('baked-token')
+  })
+
+  it('does not override an explicit BRAIN_GATEWAY_AUTH_TOKEN env value', async () => {
+    process.env.BRAIN_GATEWAY_AUTH_TOKEN = 'env-token'
+    tokenRef.value = 'baked-token'
+    const { buildRelayEnv } = await import('./relay-server')
+    const env = buildRelayEnv()
+    expect(env.BRAIN_GATEWAY_AUTH_TOKEN).toBe('env-token')
   })
 })

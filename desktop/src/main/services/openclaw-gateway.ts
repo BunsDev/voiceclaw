@@ -1,12 +1,10 @@
-import { spawn } from 'child_process'
 import { app } from 'electron'
-import { copyFileSync, existsSync, mkdirSync, readFileSync } from 'fs'
+import { randomUUID } from 'crypto'
+import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
 import { dirname, join } from 'path'
 import { allocatePort } from '../ports'
 import { resolveBundledNode } from './node-runtime'
 import { serviceManager } from './service-manager'
-
-const WARMUP_TIMEOUT_MS = 30_000
 
 export async function startBundledOpenClaw(): Promise<void> {
   const scriptPath = resolveBundledOpenClawScript()
@@ -23,14 +21,14 @@ export async function startBundledOpenClaw(): Promise<void> {
   const stateDir = join(app.getPath('userData'), 'openclaw')
   const configPath = join(stateDir, 'openclaw.json')
   ensureSeededConfig(configPath)
-  await warmupIfFirstLaunch({ nodePath, scriptPath, stateDir, configPath })
+  ensureGatewayAuthToken(configPath)
 
   const port = await allocatePort('openclawGateway')
 
   await serviceManager.start({
     name: 'openclawGateway',
     command: nodePath,
-    args: [scriptPath, 'gateway', '--port', String(port), '--auth', 'none', '--allow-unconfigured'],
+    args: [scriptPath, 'gateway', '--port', String(port)],
     env: {
       OPENCLAW_STATE_DIR: stateDir,
       OPENCLAW_CONFIG_PATH: configPath,
@@ -50,6 +48,21 @@ export function resolveBundledOpenClawScript(): string | null {
   }
   const dev = join(__dirname, '..', '..', '..', 'vendor', 'openclaw', 'openclaw.mjs')
   return existsSync(dev) ? dev : null
+}
+
+export function readGatewayAuthToken(configPath: string): string | null {
+  try {
+    const raw = readFileSync(configPath, 'utf8')
+    const parsed = JSON.parse(raw) as { gateway?: { auth?: { token?: unknown } } }
+    const token = parsed.gateway?.auth?.token
+    return typeof token === 'string' && token.length > 0 ? token : null
+  } catch {
+    return null
+  }
+}
+
+export function getOpenClawConfigPath(): string {
+  return join(app.getPath('userData'), 'openclaw', 'openclaw.json')
 }
 
 // ---------------------------------------------------------------------------
@@ -77,66 +90,31 @@ function resolveConfigTemplate(): string | null {
   return existsSync(dev) ? dev : null
 }
 
-// First launch on a fresh install: openclaw bakes auth tokens for the
-// gateway and bundled plugins into the config, then sends itself
-// SIGUSR1 to apply them. Without a supervisor it just exits, which
-// trips the health-check timeout. We spawn it once headlessly until
-// config stabilizes, then let serviceManager take over the steady-state.
-async function warmupIfFirstLaunch(opts: {
-  nodePath: string
-  scriptPath: string
-  stateDir: string
-  configPath: string
-}): Promise<void> {
-  if (configHasBakedTokens(opts.configPath)) return
-  await runWarmupGateway(opts)
-}
-
-function configHasBakedTokens(configPath: string): boolean {
-  try {
-    const raw = readFileSync(configPath, 'utf8')
-    const parsed = JSON.parse(raw) as { gateway?: { auth?: { token?: unknown } } }
-    return typeof parsed.gateway?.auth?.token === 'string'
-  } catch {
-    return false
-  }
-}
-
-function runWarmupGateway(opts: {
-  nodePath: string
-  scriptPath: string
-  stateDir: string
-  configPath: string
-}): Promise<void> {
-  return new Promise((resolve) => {
-    const warmupPort = String(40000 + Math.floor(Math.random() * 1000))
-    const child = spawn(
-      opts.nodePath,
-      [opts.scriptPath, 'gateway', '--port', warmupPort, '--auth', 'none', '--allow-unconfigured'],
-      {
-        env: {
-          PATH: process.env.PATH,
-          HOME: process.env.HOME,
-          OPENCLAW_STATE_DIR: opts.stateDir,
-          OPENCLAW_CONFIG_PATH: opts.configPath,
-        },
-        stdio: 'ignore',
-        detached: false,
-      },
-    )
-    let done = false
-    const finish = () => {
-      if (done) return
-      done = true
-      try {
-        child.kill('SIGTERM')
-      } catch {
-        // already exited
-      }
-      resolve()
+// Mints a random gateway token on first launch and persists it under
+// gateway.auth.token. The relay reads the same file to populate
+// BRAIN_GATEWAY_AUTH_TOKEN, so both ends share one secret without ever
+// shipping a hardcoded default and without leaving the gateway open via
+// --auth none on loopback.
+function ensureGatewayAuthToken(configPath: string): void {
+  let parsed: Record<string, unknown> = {}
+  if (existsSync(configPath)) {
+    try {
+      parsed = JSON.parse(readFileSync(configPath, 'utf8')) as Record<string, unknown>
+    } catch {
+      parsed = {}
     }
-    const timer = setTimeout(finish, WARMUP_TIMEOUT_MS)
-    timer.unref()
-    child.once('exit', finish)
-  })
+  } else {
+    mkdirSync(dirname(configPath), { recursive: true })
+  }
+  const gateway = (parsed.gateway as Record<string, unknown> | undefined) ?? {}
+  const auth = (gateway.auth as Record<string, unknown> | undefined) ?? {}
+  if (typeof auth.token === 'string' && auth.token.length > 0 && auth.mode === 'token') return
+
+  auth.mode = 'token'
+  if (typeof auth.token !== 'string' || auth.token.length === 0) {
+    auth.token = randomUUID()
+  }
+  gateway.auth = auth
+  parsed.gateway = gateway
+  writeFileSync(configPath, JSON.stringify(parsed, null, 2) + '\n', { mode: 0o600 })
 }

@@ -39,6 +39,7 @@ const HEALTH_TIMEOUT_MS_DEFAULT = 10_000
 
 class ServiceManager extends EventEmitter {
   private services = new Map<ServiceName, ServiceState>()
+  private restartChain: Promise<void> = Promise.resolve()
 
   async start(def: ServiceDefinition): Promise<void> {
     const existing = this.services.get(def.name)
@@ -119,6 +120,30 @@ class ServiceManager extends EventEmitter {
     }
   }
 
+  // Queues a stop+rebuild of an existing service so callers issuing
+  // back-to-back restarts (e.g. user pasting Gemini then OpenAI keys)
+  // never spawn two children at once. Each restart waits for the
+  // previous one to either re-spawn the service or surface an error.
+  restart(
+    name: ServiceName,
+    rebuildEnv?: () => NodeJS.ProcessEnv,
+  ): Promise<void> {
+    const next = this.restartChain.then(async () => {
+      const state = this.services.get(name)
+      if (!state) return
+      const def = state.definition
+      const child = state.child
+      this.stop(name)
+      await waitForChildExit(child)
+      const replayDef: ServiceDefinition = rebuildEnv
+        ? { ...def, env: rebuildEnv() }
+        : def
+      await this.start(replayDef)
+    })
+    this.restartChain = next.catch(() => undefined)
+    return next
+  }
+
   getStatus(name: ServiceName): ServiceStatus {
     return this.services.get(name)?.status ?? { state: 'idle' }
   }
@@ -183,4 +208,14 @@ function probeHealth(url: string): Promise<boolean> {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function waitForChildExit(child: ChildProcess | null): Promise<void> {
+  if (!child) return Promise.resolve()
+  if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve()
+  return new Promise((resolve) => {
+    const done = () => resolve()
+    child.once('exit', done)
+    child.once('error', done)
+  })
 }

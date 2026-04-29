@@ -159,15 +159,19 @@ app.whenReady().then(async () => {
   }
 
   // Best-effort spawn of bundled services. Missing binary is fine in dev.
-  startBundledOpenClaw().catch((err) => {
-    console.warn('[openclaw] failed to start', err)
-    captureException(err, { source: 'startBundledOpenClaw' })
-  })
-
-  startBundledRelayServer().catch((err) => {
-    console.warn('[relay] failed to start', err)
-    captureException(err, { source: 'startBundledRelayServer' })
-  })
+  // Sequenced so the openclaw config (with its baked auth token) is on
+  // disk before the relay reads it for BRAIN_GATEWAY_AUTH_TOKEN.
+  startBundledOpenClaw()
+    .catch((err) => {
+      console.warn('[openclaw] failed to start', err)
+      captureException(err, { source: 'startBundledOpenClaw' })
+    })
+    .then(() =>
+      startBundledRelayServer().catch((err) => {
+        console.warn('[relay] failed to start', err)
+        captureException(err, { source: 'startBundledRelayServer' })
+      }),
+    )
 
   // Check for app updates. No-op in dev or when disabled.
   initAutoUpdater().catch((err) => {

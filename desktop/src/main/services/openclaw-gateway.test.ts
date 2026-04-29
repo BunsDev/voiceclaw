@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const isPackagedRef = { value: false }
 const existsRef = { fn: (_p: string) => false as boolean }
+const readFileRef = { fn: (_p: string, _enc: string) => '{}' }
 let originalResourcesPath: string | undefined
 
 vi.mock('electron', () => ({
@@ -17,7 +18,8 @@ vi.mock('fs', () => ({
   existsSync: (path: string) => existsRef.fn(path),
   copyFileSync: () => undefined,
   mkdirSync: () => undefined,
-  readFileSync: () => '{}',
+  readFileSync: (path: string, enc: string) => readFileRef.fn(path, enc),
+  writeFileSync: () => undefined,
 }))
 
 describe('resolveBundledOpenClawScript', () => {
@@ -72,5 +74,42 @@ describe('resolveBundledOpenClawScript', () => {
     const resolved = resolveBundledOpenClawScript()
     expect(resolved).not.toBeNull()
     expect(resolved!.endsWith('/vendor/openclaw/openclaw.mjs')).toBe(true)
+  })
+})
+
+describe('readGatewayAuthToken', () => {
+  beforeEach(() => {
+    existsRef.fn = () => false
+    readFileRef.fn = () => '{}'
+  })
+
+  afterEach(() => {
+    vi.resetModules()
+  })
+
+  it('returns null when the file is unreadable', async () => {
+    existsRef.fn = () => false
+    readFileRef.fn = () => {
+      throw new Error('ENOENT')
+    }
+    const { readGatewayAuthToken } = await import('./openclaw-gateway')
+    expect(readGatewayAuthToken('/missing.json')).toBeNull()
+  })
+
+  it('returns the token when the config has a string token', async () => {
+    existsRef.fn = () => true
+    readFileRef.fn = () => JSON.stringify({ gateway: { auth: { token: 'secret-xyz' } } })
+    const { readGatewayAuthToken } = await import('./openclaw-gateway')
+    expect(readGatewayAuthToken('/x.json')).toBe('secret-xyz')
+  })
+
+  it('returns null when the token is missing or wrong type', async () => {
+    existsRef.fn = () => true
+    readFileRef.fn = () => JSON.stringify({ gateway: { auth: { mode: 'token' } } })
+    const { readGatewayAuthToken } = await import('./openclaw-gateway')
+    expect(readGatewayAuthToken('/x.json')).toBeNull()
+
+    readFileRef.fn = () => JSON.stringify({ gateway: { auth: { token: 123 } } })
+    expect(readGatewayAuthToken('/x.json')).toBeNull()
   })
 })
