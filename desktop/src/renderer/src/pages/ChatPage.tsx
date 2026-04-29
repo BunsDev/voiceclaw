@@ -220,7 +220,7 @@ export function ChatPage() {
     setConnectionError('')
     setIsConnecting(true)
     setOutputMuted(false)
-    const serverUrl = (await getSetting('realtime_server_url')) || 'ws://localhost:8080/ws'
+    const serverUrl = (await getSetting('realtime_server_url')) || (await defaultRelayUrl())
     const model = normalizeRealtimeModel(await getSetting('realtime_model'))
     const voice = normalizeRealtimeVoice(model, await getSetting('realtime_voice'))
     const apiKey = (await getSetting('realtime_api_key')) || ''
@@ -571,4 +571,17 @@ function normalizeRealtimeVoice(model: typeof REALTIME_MODELS[number], voice: st
   }
 
   return voice && (GEMINI_VOICES as readonly string[]).includes(voice) ? voice : 'Zephyr'
+}
+
+async function defaultRelayUrl(): Promise<string> {
+  // Bundled relay listens on a kernel-picked port when 8080 is taken;
+  // the IPC tells us where it actually landed.
+  try {
+    const ports = await window.electronAPI?.app?.getServicePorts?.()
+    const port = ports?.relay
+    if (typeof port === 'number' && port > 0) return `ws://127.0.0.1:${port}/ws`
+  } catch {
+    // fall through
+  }
+  return 'ws://localhost:8080/ws'
 }

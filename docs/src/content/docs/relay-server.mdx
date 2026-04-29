@@ -9,6 +9,8 @@ The relay server is a TypeScript / Node.js WebSocket server that sits between cl
 
 ## Running
 
+If you installed VoiceClaw from the DMG, you do not need to run anything — the relay starts automatically inside the desktop app. The sections below describe how to run the relay yourself when working on the relay code.
+
 <Tabs>
   <TabItem label="Development">
     ```bash
@@ -18,11 +20,8 @@ The relay server is a TypeScript / Node.js WebSocket server that sits between cl
     yarn dev                # starts with tsx watch (auto-reload)
     ```
   </TabItem>
-  <TabItem label="Production">
-    ```bash
-    yarn build
-    yarn start              # runs dist/index.js
-    ```
+  <TabItem label="Production (bundled in DMG)">
+    No setup required. Open VoiceClaw and the relay starts on first launch. The Settings page shows the URL the desktop app is using.
   </TabItem>
 </Tabs>
 
@@ -31,6 +30,18 @@ The server starts on port 8080 by default. It exposes:
 - `GET /health` -- health check endpoint (returns `{"status": "ok"}`)
 - `GET /test` -- browser-based test page for quick WebSocket testing
 - `ws://localhost:8080/ws` -- WebSocket endpoint for clients
+
+## Bundled with the desktop app
+
+DMG installs of the VoiceClaw desktop app ship a Node 22 runtime and the relay's compiled JavaScript inside the .app bundle, then spawn the relay automatically as a managed service alongside `openclaw-gateway`. End users do not need to install Node, run `yarn`, or open a terminal — opening VoiceClaw is enough. The relay listens on port `8080` by default, with a kernel-allocated fallback if the port is already taken; the Settings page in the app reports the live port.
+
+The bundle is produced by `yarn workspace voiceclaw-desktop dist:mac`, which downloads the pinned Node release, runs `yarn workspace relay-server build:bundle` (TypeScript build + production `npm install`), then signs and notarizes the whole .app under the desktop app's hardened-runtime entitlements.
+
+In development you continue to run the relay via `concurrently` from the repo root (`yarn dev`). The desktop app's bundled-service spawn is a no-op when the bundled JavaScript is missing, so the renderer keeps talking to the locally tsx-watched relay.
+
+<Aside type="caution">
+Initial release ships **arm64 only**. Intel Macs hit the "node runtime not found" branch and the desktop app continues without a bundled relay, requiring users to point at an external relay endpoint via Settings. A darwin-x64 Node download (and a `lipo`-merged universal binary) is tracked as a follow-up.
+</Aside>
 
 ## Configuration
 

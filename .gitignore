@@ -19,6 +19,12 @@ mobile/build/
 desktop/build/icon.iconset/
 desktop/build/icon-master.png
 
+# Bundled service runtimes — produced by yarn dist:mac
+desktop/resources/bin/node
+desktop/resources/relay-server-bundle/
+desktop/resources/openclaw/
+desktop/resources/.openclaw-pack/
+
 # IDE
 .idea/
 .vscode/

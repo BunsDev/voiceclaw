@@ -12,23 +12,24 @@ files:
   - "!node_modules/**/{README.md,LICENSE*,*.map,*.ts}"
 
 # Anything under desktop/resources/ ships into <App>/Contents/Resources/
-# at the same relative path. The main process reads tray glyphs and
-# similar runtime assets via process.resourcesPath in packaged builds.
+# at the same relative path. Includes the bundled Node runtime
+# (resources/bin/node, fetched by scripts/fetch-node.mjs) and the
+# tsc-built relay (resources/relay-server-bundle/, produced by
+# `yarn workspace relay-server build:bundle`).
 extraResources:
   - from: "resources"
     to: "."
     filter:
       - "**/*"
+      - "!**/*.{md,LICENSE*,*.map,*.ts}"
+      - "!**/CHANGELOG*"
 
-# Ship a universal DMG so one download covers both Apple Silicon and
-# Intel Macs. Slightly larger file in exchange for zero "which one do I
-# download?" confusion at install time.
 mac:
   category: public.app-category.productivity
   target:
     - target: dmg
       arch:
-        - universal
+        - arm64
 
   # Hardened Runtime + entitlements are required for notarization.
   hardenedRuntime: true

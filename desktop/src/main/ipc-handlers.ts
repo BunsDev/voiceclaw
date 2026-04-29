@@ -2,6 +2,7 @@ import { dialog, ipcMain, net, shell, systemPreferences } from 'electron'
 import { getDb } from './db'
 import { isLaunchAtLoginEnabled, setLaunchAtLogin } from './login-items'
 import { serviceManager } from './services/service-manager'
+import { buildRelayEnv } from './services/relay-server'
 import { getAllocatedPorts } from './ports'
 import {
   type OnboardingPayload,
@@ -14,6 +15,7 @@ import {
 import {
   type ProviderId,
   geminiSmokeCall,
+  getProviderKey,
   listConfiguredProviders,
   setProviderKey,
   validateProviderKey,
@@ -266,15 +268,21 @@ export function registerIpcHandlers() {
     async (_e, provider: ProviderId, key: string) => {
       const result = await validateProviderKey(provider, key)
       if (!result.ok) return result
+      const previous = getProviderKey(provider)
       try {
         setProviderKey(provider, key)
-        return { ok: true as const }
       } catch (err) {
         return {
           ok: false as const,
           error: err instanceof Error ? err.message : 'Could not save key.',
         }
       }
+      if (previous !== key) {
+        serviceManager.restart('relay', () => buildRelayEnv()).catch((err) => {
+          console.warn('[relay] restart after provider key save failed', err)
+        })
+      }
+      return { ok: true as const }
     },
   )
   ipcMain.handle('provider:geminiSmoke', async (_e, prompt: string) => {
