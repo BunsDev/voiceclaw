@@ -34,16 +34,23 @@ Concrete user-facing impact from today (2026-04-28):
   attempts in ~24 seconds. All 5 failed. The user got no answer.
 - Debugging took ~30 minutes because the only ground truth was the envelope
   above. We could not distinguish:
+  - **Anthropic blocking the CLI** as a backend (this is the *expected* failure
+    mode for `claude-cli` in production — Anthropic periodically restricts the
+    desktop CLI from automation contexts; openclaw itself recommends using
+    Anthropic's HTTP API or another provider for this reason)
   - auth-fail (token expired / wrong profile)
   - PATH problem (wrong `claude` binary picked up)
   - binary-missing (`claude` not installed in this shell env)
   - network (Anthropic API unreachable)
   - rate-limit (429 from upstream)
 - The only way to narrow it down was running `claude -p "say hi"` manually
-  in the same shell. That isn't reproducible from CI logs and isn't an option
-  on a remote/headless gateway.
-- The eventual fix was a config workaround (route to `codex`), but the
-  observability gap that delayed diagnosis remains.
+  in the same shell. That isn't reproducible from CI logs, isn't an option
+  on a remote/headless gateway, and doesn't help if the failure is an
+  Anthropic-side block specific to the openclaw subprocess context.
+- The eventual fix was a config workaround (route to `codex`, per openclaw's
+  own provider recommendation), but the observability gap that delayed
+  diagnosis remains. Without stderr surfaced, every future occurrence of any
+  of the failure modes above will require the same manual triage.
 
 In short: the gateway has the data. It captures `result.stderr` on every spawn.
 It just throws it away when emitting the structured failure result.
