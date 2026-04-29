@@ -5,7 +5,7 @@ import type { SessionConfigEvent } from "../types.js"
 import type { ProviderAdapter, SendToClient } from "./types.js"
 import { buildInstructions } from "../instructions.js"
 import { getGeminiTools } from "../tools/index.js"
-import { buildHistorySplit, formatSummaryPreamble, formatRecentTurnsPreamble } from "../history.js"
+import { buildHistorySplit, formatSummaryPreamble, formatRecentTurnsPreamble, type HistoryMessage } from "../history.js"
 import { log, error as logError } from "../log.js"
 
 const GEMINI_WS_URL = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent"
@@ -98,15 +98,7 @@ export class GeminiAdapter implements ProviderAdapter {
     this.disconnected = false
     this.watchdogEnabled = config.watchdog === "enabled"
 
-    const split = await buildHistorySplit(config.conversationHistory, "gemini")
-    const sections: string[] = []
-    if (split.summary) sections.push(formatSummaryPreamble(split.summary))
-    const recentPreamble = formatRecentTurnsPreamble(split.recent)
-    if (recentPreamble) sections.push(recentPreamble)
-    this.resumePreamble = sections.join("\n\n")
-    if (this.resumePreamble) {
-      log(`[gemini] Resume context folded into systemInstruction: recent=${split.recent.length} turns, summary=${split.summary ? `${split.summary.length} chars` : "none"} (${this.resumePreamble.length} chars)`)
-    }
+    await this.rebuildResumePreamble(config.conversationHistory ?? [])
 
     await this.openUpstream()
   }
@@ -257,6 +249,18 @@ export class GeminiAdapter implements ProviderAdapter {
     // prior session's stale handle.
     this.currentlyResumable = false
     this.rotateAfterToolCalls = false
+
+    // Forced-fresh has no resumption handle, so Gemini won't replay any
+    // in-call state. Rebuild the systemInstruction preamble from the original
+    // conversationHistory PLUS in-call turns accumulated since connect() so
+    // the new session sees the full conversation, not just the call-start
+    // history. Handle-based reconnects skip this — Gemini restores state
+    // from its own checkpoint.
+    if (forceFresh && this.config) {
+      const initial = this.config.conversationHistory ?? []
+      const combined: HistoryMessage[] = [...initial, ...this.transcript]
+      await this.rebuildResumePreamble(combined)
+    }
     const handlePreview = this.resumptionHandle ? `${this.resumptionHandle.slice(0, 8)}…` : "fresh"
     log(`[gemini] Reconnecting (${reason}, handle=${handlePreview})`)
     // Finalize any in-flight transcription before rotating. Gemini's resumed
@@ -785,6 +789,18 @@ export class GeminiAdapter implements ProviderAdapter {
     if (this.postResumeTimer) {
       clearTimeout(this.postResumeTimer)
       this.postResumeTimer = null
+    }
+  }
+
+  private async rebuildResumePreamble(history: HistoryMessage[]) {
+    const split = await buildHistorySplit(history, "gemini")
+    const sections: string[] = []
+    if (split.summary) sections.push(formatSummaryPreamble(split.summary))
+    const recentPreamble = formatRecentTurnsPreamble(split.recent)
+    if (recentPreamble) sections.push(recentPreamble)
+    this.resumePreamble = sections.join("\n\n")
+    if (this.resumePreamble) {
+      log(`[gemini] Resume context folded into systemInstruction: recent=${split.recent.length} turns, summary=${split.summary ? `${split.summary.length} chars` : "none"} (${this.resumePreamble.length} chars)`)
     }
   }
 
