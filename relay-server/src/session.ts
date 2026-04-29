@@ -38,10 +38,12 @@ export class RelaySession {
   constructor(ws: WebSocket) {
     this.ws = ws
     this.ws.on("message", (raw) => this.handleMessage(raw))
-    this.ws.on("close", () => this.cleanup())
+    this.ws.on("close", () => {
+      trackBackgroundTask(this.cleanup(), `session-cleanup:${this.id}`)
+    })
     this.ws.on("error", (err) => {
       logError(`[session:${this.id}] WebSocket error:`, err.message)
-      this.cleanup()
+      trackBackgroundTask(this.cleanup(), `session-cleanup:${this.id}`)
     })
     log(`[session:${this.id}] Client connected`)
   }
@@ -81,7 +83,10 @@ export class RelaySession {
         // finalize (which races against the next turn starting) can target
         // the correct voice-turn span via attachMediaAttrs(attrs, turnId).
         const endingTurnId = this.tracer.getActiveTurnId()
-        void this.finalizeMediaTurn(endingTurnId)
+        trackBackgroundTask(
+          this.finalizeMediaTurn(endingTurnId),
+          `media-finalize:${this.id}:${endingTurnId ?? "unknown"}`,
+        )
         this.tracer.endTurn()
         break
       }

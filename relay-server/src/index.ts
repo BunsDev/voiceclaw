@@ -41,12 +41,23 @@ wss.on("connection", (ws) => {
   new RelaySession(ws)
 })
 
+// Guards SIGTERM/SIGINT idempotency at the OS-signal layer; the drain-loop
+// flag in shutdown.ts guards gracefulShutdown itself.
 let shuttingDown = false
 
 async function shutdown() {
   if (shuttingDown) return
   shuttingDown = true
   log("Shutting down...")
+
+  // If server.close() hangs on a stuck keep-alive socket, the awaits below
+  // never complete and gracefulShutdown is never reached. Backstop with a
+  // hard-kill timer so the process always exits.
+  const hardKill = setTimeout(() => {
+    warn("[shutdown] hard-kill timeout reached, forcing exit")
+    process.exit(1)
+  }, SHUTDOWN_TIMEOUT_MS + 5_000)
+  hardKill.unref()
 
   // Close client sockets first so each RelaySession runs its cleanup()
   // (endSession → adapter disconnect → transcript sync) before we tear
@@ -55,6 +66,9 @@ async function shutdown() {
   wss.close()
   await new Promise<void>((resolve) => server.close(() => resolve()))
 
+  // Order: gracefulShutdown drains background tasks (which finish their bg.end()
+  // calls) BEFORE shutdownLangfuse flushes the SDK — otherwise span ends race
+  // the export pipeline and the last few ops disappear.
   await gracefulShutdown(SHUTDOWN_TIMEOUT_MS)
 
   // Drain pending spans before exiting — otherwise the last turn of every
