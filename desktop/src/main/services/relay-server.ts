@@ -3,16 +3,18 @@ import { existsSync } from 'fs'
 import { join } from 'path'
 import { allocatePort } from '../ports'
 import { getProviderKey, type ProviderId } from '../provider-keys'
+import { resolveBundledNode } from './node-runtime'
 import { serviceManager } from './service-manager'
 
-// Packaged builds find the binary under process.resourcesPath; dev
-// builds (where __dirname is out/main/) walk up to desktop/resources/.
-// Without the binary present we no-op so `yarn dev` keeps working.
-
 export async function startBundledRelayServer(): Promise<void> {
-  const binaryPath = resolveBundledBinary()
-  if (!binaryPath) {
-    console.info('[relay] bundled binary not found; skipping spawn')
+  const scriptPath = resolveBundledRelayScript()
+  if (!scriptPath) {
+    console.info('[relay] bundled script not found; skipping spawn')
+    return
+  }
+  const nodePath = resolveBundledNode()
+  if (!nodePath) {
+    console.info('[relay] bundled node runtime not found; skipping spawn')
     return
   }
 
@@ -20,13 +22,23 @@ export async function startBundledRelayServer(): Promise<void> {
 
   await serviceManager.start({
     name: 'relay',
-    command: binaryPath,
-    args: [],
+    command: nodePath,
+    args: [scriptPath],
     env: buildRelayEnv(),
     port,
     healthCheckUrl: `http://127.0.0.1:${port}/health`,
     logFile: 'relay-server.log',
   })
+}
+
+export function resolveBundledRelayScript(): string | null {
+  const relative = join('relay-server-bundle', 'dist', 'index.js')
+  if (app.isPackaged) {
+    const packaged = join(process.resourcesPath, relative)
+    return existsSync(packaged) ? packaged : null
+  }
+  const dev = join(__dirname, '..', '..', 'resources', relative)
+  return existsSync(dev) ? dev : null
 }
 
 // ---------------------------------------------------------------------------
@@ -72,17 +84,4 @@ function buildRelayEnv(): NodeJS.ProcessEnv {
   // provider-keys vault, so the relay reads it from process.env via the
   // forwarded passthrough above when the user has exported it.
   return env
-}
-
-export function resolveBundledBinary(): string | null {
-  const arch = process.arch === 'arm64' ? 'arm64' : 'x64'
-  const binaryName = `relay-server-darwin-${arch}`
-
-  if (app.isPackaged) {
-    const packaged = join(process.resourcesPath, 'bin', binaryName)
-    return existsSync(packaged) ? packaged : null
-  }
-
-  const dev = join(__dirname, '..', '..', 'resources', 'bin', binaryName)
-  return existsSync(dev) ? dev : null
 }

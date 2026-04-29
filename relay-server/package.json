@@ -6,8 +6,7 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
-    "build:bin": "bun build --compile --target=bun-darwin-arm64 ./src/index.ts --outfile dist/bin/relay-server-darwin-arm64",
-    "build:bin:x64": "bun build --compile --target=bun-darwin-x64 ./src/index.ts --outfile dist/bin/relay-server-darwin-x64",
+    "build:bundle": "node scripts/build-bundle.mjs",
     "start": "node dist/index.js",
     "test": "vitest run",
     "test:watch": "vitest",

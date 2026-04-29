@@ -9,14 +9,18 @@ vi.mock('electron', () => ({
     get isPackaged(): boolean {
       return isPackagedRef.value
     },
+    getPath: () => '/tmp/voiceclaw-test',
   },
 }))
 
 vi.mock('fs', () => ({
   existsSync: (path: string) => existsRef.fn(path),
+  copyFileSync: () => undefined,
+  mkdirSync: () => undefined,
+  readFileSync: () => '{}',
 }))
 
-describe('resolveBundledRelayScript', () => {
+describe('resolveBundledOpenClawScript', () => {
   beforeEach(() => {
     originalResourcesPath = process.resourcesPath
     isPackagedRef.value = false
@@ -40,11 +44,11 @@ describe('resolveBundledRelayScript', () => {
       configurable: true,
     })
     existsRef.fn = (p: string) =>
-      p === '/Applications/VoiceClaw.app/Contents/Resources/relay-server-bundle/dist/index.js'
+      p === '/Applications/VoiceClaw.app/Contents/Resources/openclaw/openclaw.mjs'
 
-    const { resolveBundledRelayScript } = await import('./relay-server')
-    expect(resolveBundledRelayScript()).toBe(
-      '/Applications/VoiceClaw.app/Contents/Resources/relay-server-bundle/dist/index.js',
+    const { resolveBundledOpenClawScript } = await import('./openclaw-gateway')
+    expect(resolveBundledOpenClawScript()).toBe(
+      '/Applications/VoiceClaw.app/Contents/Resources/openclaw/openclaw.mjs',
     )
   })
 
@@ -56,25 +60,17 @@ describe('resolveBundledRelayScript', () => {
     })
     existsRef.fn = () => false
 
-    const { resolveBundledRelayScript } = await import('./relay-server')
-    expect(resolveBundledRelayScript()).toBeNull()
+    const { resolveBundledOpenClawScript } = await import('./openclaw-gateway')
+    expect(resolveBundledOpenClawScript()).toBeNull()
   })
 
-  it('returns dev path when not packaged and script exists in resources/', async () => {
+  it('returns dev path under vendor/openclaw/ when not packaged', async () => {
     isPackagedRef.value = false
-    existsRef.fn = (p: string) => p.endsWith('/resources/relay-server-bundle/dist/index.js')
+    existsRef.fn = (p: string) => p.endsWith('/vendor/openclaw/openclaw.mjs')
 
-    const { resolveBundledRelayScript } = await import('./relay-server')
-    const resolved = resolveBundledRelayScript()
+    const { resolveBundledOpenClawScript } = await import('./openclaw-gateway')
+    const resolved = resolveBundledOpenClawScript()
     expect(resolved).not.toBeNull()
-    expect(resolved!.endsWith('/resources/relay-server-bundle/dist/index.js')).toBe(true)
-  })
-
-  it('returns null in dev when script is absent (the common dev case)', async () => {
-    isPackagedRef.value = false
-    existsRef.fn = () => false
-
-    const { resolveBundledRelayScript } = await import('./relay-server')
-    expect(resolveBundledRelayScript()).toBeNull()
+    expect(resolved!.endsWith('/vendor/openclaw/openclaw.mjs')).toBe(true)
   })
 })

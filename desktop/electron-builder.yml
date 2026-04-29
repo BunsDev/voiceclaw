@@ -12,22 +12,18 @@ files:
   - "!node_modules/**/{README.md,LICENSE*,*.map,*.ts}"
 
 # Anything under desktop/resources/ ships into <App>/Contents/Resources/
-# at the same relative path. The main process reads tray glyphs and
-# similar runtime assets via process.resourcesPath in packaged builds.
+# at the same relative path. Includes the bundled Node runtime
+# (resources/bin/node, fetched by scripts/fetch-node.mjs) and the
+# tsc-built relay (resources/relay-server-bundle/, produced by
+# `yarn workspace relay-server build:bundle`).
 extraResources:
   - from: "resources"
     to: "."
     filter:
       - "**/*"
-  # Bundled relay-server binary. Built by `yarn workspace relay-server
-  # build:bin` before electron-builder runs (see `dist:mac` in
-  # desktop/package.json). v1 ships arm64 only.
-  - from: "../relay-server/dist/bin/relay-server-darwin-arm64"
-    to: "bin/relay-server-darwin-arm64"
+      - "!**/*.{md,LICENSE*,*.map,*.ts}"
+      - "!**/CHANGELOG*"
 
-# Apple Silicon only for v1 — the bundled relay binary is arm64. An
-# Intel build needs a darwin-x64 bun compile + lipo merge; tracked
-# separately.
 mac:
   category: public.app-category.productivity
   target:

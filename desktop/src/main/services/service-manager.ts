@@ -24,6 +24,7 @@ export type ServiceDefinition = {
   env?: NodeJS.ProcessEnv
   port: number
   healthCheckUrl?: string
+  healthCheckTimeoutMs?: number
   logFile: string
 }
 
@@ -34,7 +35,7 @@ type ServiceState = {
 }
 
 const HEALTH_POLL_INTERVAL_MS = 200
-const HEALTH_TIMEOUT_MS = 10_000
+const HEALTH_TIMEOUT_MS_DEFAULT = 10_000
 
 class ServiceManager extends EventEmitter {
   private services = new Map<ServiceName, ServiceState>()
@@ -82,9 +83,10 @@ class ServiceManager extends EventEmitter {
     })
 
     if (def.healthCheckUrl) {
-      const healthy = await waitForHealthy(def.healthCheckUrl, child, logStream, def.name)
+      const timeoutMs = def.healthCheckTimeoutMs ?? HEALTH_TIMEOUT_MS_DEFAULT
+      const healthy = await waitForHealthy(def.healthCheckUrl, child, logStream, def.name, timeoutMs)
       if (!healthy) {
-        const reason = `health check did not pass within ${HEALTH_TIMEOUT_MS}ms (${def.healthCheckUrl})`
+        const reason = `health check did not pass within ${timeoutMs}ms (${def.healthCheckUrl})`
         logStream.write(`\n[service-manager] ${def.name}: ${reason}\n`)
         try {
           child.kill('SIGTERM')
@@ -148,8 +150,9 @@ async function waitForHealthy(
   child: ChildProcess,
   logStream: WriteStream,
   name: ServiceName,
+  timeoutMs: number,
 ): Promise<boolean> {
-  const deadline = Date.now() + HEALTH_TIMEOUT_MS
+  const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
     if (child.exitCode !== null || child.signalCode !== null) {
       logStream.write(
