@@ -2,9 +2,10 @@
 // Echoes audio.append back as audio.delta, no upstream connection
 
 import type { SessionConfigEvent } from "../types.js"
-import type { ProviderAdapter, SendToClient } from "./types.js"
+import type { AdapterCapabilities, ProviderAdapter, SendToClient } from "./types.js"
 
 export class EchoAdapter implements ProviderAdapter {
+  readonly capabilities: AdapterCapabilities = { blockingToolResponse: false }
   private sendToClient: SendToClient | null = null
 
   async connect(_config: SessionConfigEvent, sendToClient: SendToClient) {

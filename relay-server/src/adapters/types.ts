@@ -6,7 +6,20 @@ import type { HistoryMessage } from "../history.js"
 
 export type SendToClient = (event: RelayEvent) => void
 
+export interface AdapterCapabilities {
+  /**
+   * True when the adapter can hold a tool call open until the real result is
+   * sent — the model truly waits on `sendToolResult` before generating its
+   * next turn. False = control returns immediately and the result must be
+   * threaded back through `injectContext` later.
+   */
+  blockingToolResponse: boolean
+}
+
 export interface ProviderAdapter {
+  /** Capability flags consulted by the session dispatcher */
+  readonly capabilities: AdapterCapabilities
+
   /** Connect to the upstream STS provider */
   connect(config: SessionConfigEvent, sendToClient: SendToClient): Promise<void>
 

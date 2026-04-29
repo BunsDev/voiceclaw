@@ -157,6 +157,7 @@ function makeFakeAdapter(handlers: {
   onSendToolResult: (callId: string, output: string) => void
 }): ProviderAdapter {
   return {
+    capabilities: { blockingToolResponse: true },
     connect: async () => {},
     sendAudio: () => {},
     commitAudio: () => {},

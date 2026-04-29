@@ -10,7 +10,7 @@ import type {
 } from "./types.js"
 import type { ProviderAdapter, SendToClient } from "./adapters/types.js"
 import { createAdapter } from "./adapters/index.js"
-import { handleToolCall, resolveTavilyKey } from "./tools/index.js"
+import { executeSyncTool, findRelayTool, getRelayTools, resolveTavilyKey } from "./tools/index.js"
 import { askBrain } from "./tools/brain.js"
 import { webSearch } from "./tools/web-search.js"
 import { buildInstructions } from "./instructions.js"
@@ -18,7 +18,6 @@ import { log, error as logError } from "./log.js"
 import { TurnTracer } from "./tracing/turn-tracer.js"
 import { MediaCapture } from "./media/capture.js"
 import { trackBackgroundTask } from "./shutdown.js"
-const SERVER_SIDE_TOOLS = new Set(["echo_tool", "ask_brain", "web_search"])
 
 export class RelaySession {
   readonly id = randomUUID()
@@ -124,8 +123,7 @@ export class RelaySession {
         break
     }
 
-    // Intercept tool calls — handle server-side tools, forward the rest to client
-    if (event.type === "tool.call" && SERVER_SIDE_TOOLS.has(event.name)) {
+    if (event.type === "tool.call" && this.isServerSideTool(event.name)) {
       this.handleServerToolCall(event.callId, event.name, event.arguments)
       return
     }
@@ -151,28 +149,50 @@ export class RelaySession {
   private handleServerToolCall(callId: string, name: string, args: string) {
     log(`[session:${this.id}] Handling server-side tool: ${name}`)
 
-    // Synchronous tools
-    const syncResult = handleToolCall(name, args)
+    const tool = this.config ? findRelayTool(this.config, name) : null
+
+    const syncResult = executeSyncTool(name, args)
     if (syncResult !== null) {
       this.tracer.endToolCall(callId, syncResult)
       this.adapter?.sendToolResult(callId, syncResult)
       return
     }
 
-    // Async tools
+    const blocking = tool?.blocking ?? false
+    const adapterSupportsBlocking = this.adapter?.capabilities.blockingToolResponse ?? true
+    if (blocking && adapterSupportsBlocking) {
+      this.handleBlockingTool(callId, name, args)
+      return
+    }
+
+    this.handleAsyncTool(callId, name, args)
+  }
+
+  private handleBlockingTool(callId: string, name: string, args: string) {
+    if (name === "web_search") {
+      this.runWebSearch(callId, args)
+      return
+    }
+    if (name === "ask_brain") {
+      this.runBlockingAskBrain(callId, args)
+      return
+    }
+    log(`[session:${this.id}] No blocking executor registered for tool: ${name}`)
+  }
+
+  private handleAsyncTool(callId: string, name: string, args: string) {
     if (name === "ask_brain") {
       this.handleAskBrain(callId, args)
       return
     }
-
     if (name === "web_search") {
-      this.handleWebSearch(callId, args)
+      this.handleAsyncWebSearch(callId, args)
       return
     }
-
+    log(`[session:${this.id}] No async handler registered for tool: ${name}`)
   }
 
-  private handleWebSearch(callId: string, args: string) {
+  private runWebSearch(callId: string, args: string) {
     if (!this.config) return
 
     // Resolve the Tavily key with the same precedence the tool registry used
@@ -210,7 +230,7 @@ export class RelaySession {
 
     // Run inside the tool span's OTel context so any future child spans (e.g.
     // if we add per-result tracing) attach to the right parent. Same pattern
-    // as handleAskBrain — never use context.active() as a fallback.
+    // as runBlockingAskBrain — never use context.active() as a fallback.
     const ctx = this.tracer.getToolSpanContext(callId) ?? ROOT_CONTEXT
     const run = () => webSearch(query, { apiKey: tavilyKey }, controller.signal)
 
@@ -220,14 +240,13 @@ export class RelaySession {
 
       if (controller.signal.aborted) {
         log(`[session:${this.id}] web_search (${callId}) was cancelled — discarding result`)
-        this.tracer.endToolCall(callId, JSON.stringify({ status: "cancelled" }), "cancelled")
+        const cancelledPayload = JSON.stringify({ status: "cancelled" })
+        this.tracer.endToolCall(callId, cancelledPayload, "cancelled")
+        this.adapter?.sendToolResult(callId, cancelledPayload)
         return
       }
 
       this.tracer.endToolCall(callId, result)
-      // web_search is short enough to send directly as the tool result rather
-      // than the inject-context dance ask_brain does. The model sees structured
-      // {answer, results[]} and can speak it naturally on the same turn.
       this.adapter?.sendToolResult(callId, result)
     }).catch((err) => {
       const message = err instanceof Error ? err.message : "web search failed"
@@ -236,7 +255,78 @@ export class RelaySession {
       const errorPayload = JSON.stringify({ error: message })
       this.tracer.endToolCall(callId, errorPayload, message)
 
-      if (!controller.signal.aborted) {
+      if (controller.signal.aborted) {
+        this.adapter?.sendToolResult(callId, JSON.stringify({ status: "cancelled" }))
+      } else {
+        this.adapter?.sendToolResult(callId, errorPayload)
+      }
+    }).finally(() => {
+      this.inFlightTools.delete(callId)
+    })
+  }
+
+  private runBlockingAskBrain(callId: string, args: string) {
+    if (!this.config) return
+
+    const controller = new AbortController()
+    this.inFlightTools.set(callId, controller)
+
+    let query: string
+    try {
+      const parsed = JSON.parse(args)
+      query = parsed.query
+      if (typeof query !== "string" || query.trim() === "") {
+        throw new Error("missing or empty query")
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "invalid arguments"
+      const errorPayload = JSON.stringify({ error: msg })
+      this.tracer.endToolCall(callId, errorPayload, msg)
+      this.adapter?.sendToolResult(callId, errorPayload)
+      this.inFlightTools.delete(callId)
+      return
+    }
+
+    const sendToClient: SendToClient = (event) => this.send(event)
+    const gatewayUrl = process.env.BRAIN_GATEWAY_URL || process.env.OPENCLAW_GATEWAY_URL || "http://localhost:18789"
+    const authToken = process.env.BRAIN_GATEWAY_AUTH_TOKEN || process.env.OPENCLAW_GATEWAY_AUTH_TOKEN || this.config.apiKey
+    const sessionKey = this.config.sessionKey || this.id
+
+    const brainStart = Date.now()
+    log(`[session:${this.id}] ask_brain (blocking) → ${gatewayUrl}`)
+
+    const brainCtx = this.tracer.getToolSpanContext(callId) ?? ROOT_CONTEXT
+    const runAskBrain = () => askBrain(query, {
+      gatewayUrl,
+      authToken,
+      sessionId: sessionKey,
+    }, sendToClient, callId, controller.signal)
+
+    context.with(brainCtx, runAskBrain).then((result) => {
+      const brainMs = Date.now() - brainStart
+      log(`[session:${this.id}] ask_brain (blocking) completed in ${brainMs}ms`)
+
+      if (controller.signal.aborted) {
+        const cancelledPayload = JSON.stringify({ status: "cancelled" })
+        this.tracer.endToolCall(callId, cancelledPayload, "cancelled")
+        this.adapter?.sendToolResult(callId, cancelledPayload)
+        return
+      }
+
+      this.tracer.endToolCall(callId, result)
+      this.send({ type: "brain.result", callId, query, result })
+      this.adapter?.sendToolResult(callId, result)
+    }).catch((err) => {
+      const message = err instanceof Error ? err.message : "brain agent call failed"
+      logError(`[session:${this.id}] ask_brain (blocking) error:`, message)
+
+      const errorPayload = JSON.stringify({ error: message })
+      this.tracer.endToolCall(callId, errorPayload, message)
+
+      if (controller.signal.aborted) {
+        this.adapter?.sendToolResult(callId, JSON.stringify({ status: "cancelled" }))
+      } else {
+        this.send({ type: "brain.result", callId, query, error: message })
         this.adapter?.sendToolResult(callId, errorPayload)
       }
     }).finally(() => {
@@ -329,6 +419,75 @@ export class RelaySession {
         this.send({ type: "brain.result", callId, query, error: message })
         this.adapter?.injectContext(
           `[Brain agent failed for query: "${query}": ${message}]\nLet the user know the search didn't work and offer to try again.`
+        )
+      }
+    }).finally(() => {
+      this.inFlightTools.delete(callId)
+    })
+  }
+
+  private handleAsyncWebSearch(callId: string, args: string) {
+    if (!this.config) return
+
+    const tavilyKey = resolveTavilyKey(this.config)
+    if (!tavilyKey) {
+      const errorPayload = JSON.stringify({ error: "Tavily API key not configured" })
+      this.tracer.endToolCall(callId, errorPayload, "no tavily key")
+      this.adapter?.sendToolResult(callId, errorPayload)
+      return
+    }
+
+    let query: string
+    try {
+      const parsed = JSON.parse(args)
+      query = parsed.query
+      if (typeof query !== "string" || query.trim() === "") {
+        throw new Error("missing or empty query")
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "invalid arguments"
+      const errorPayload = JSON.stringify({ error: msg })
+      this.tracer.endToolCall(callId, errorPayload, msg)
+      this.adapter?.sendToolResult(callId, errorPayload)
+      return
+    }
+
+    const controller = new AbortController()
+    this.inFlightTools.set(callId, controller)
+
+    this.adapter?.sendToolResult(callId, JSON.stringify({
+      status: "searching",
+      message: "Looking that up now. I'll share what I find in a moment.",
+    }))
+
+    const start = Date.now()
+    log(`[session:${this.id}] web_search (async) → tavily`)
+
+    const ctx = this.tracer.getToolSpanContext(callId) ?? ROOT_CONTEXT
+    const run = () => webSearch(query, { apiKey: tavilyKey }, controller.signal)
+
+    context.with(ctx, run).then((result) => {
+      const ms = Date.now() - start
+      log(`[session:${this.id}] web_search (async) completed in ${ms}ms`)
+
+      if (controller.signal.aborted) {
+        this.tracer.endToolCall(callId, JSON.stringify({ status: "cancelled" }), "cancelled")
+        return
+      }
+
+      this.tracer.endToolCall(callId, result)
+      this.adapter?.injectContext(
+        `[Web search result for query: "${query}"]\n${result}\n\nPlease share this information with the user naturally.`
+      )
+    }).catch((err) => {
+      const message = err instanceof Error ? err.message : "web search failed"
+      logError(`[session:${this.id}] web_search (async) error:`, message)
+
+      this.tracer.endToolCall(callId, JSON.stringify({ error: message }), message)
+
+      if (!controller.signal.aborted) {
+        this.adapter?.injectContext(
+          `[Web search failed for query: "${query}": ${message}]\nLet the user know the search didn't work and offer to try again.`
         )
       }
     }).finally(() => {
@@ -531,6 +690,11 @@ export class RelaySession {
     } catch (err) {
       logError(`[session:${this.id}] session media finalize failed:`, err instanceof Error ? err.message : err)
     }
+  }
+
+  private isServerSideTool(name: string): boolean {
+    if (!this.config) return false
+    return getRelayTools(this.config).some((tool) => tool.name === name)
   }
 
   private abortAllInFlightTools(reason: string) {

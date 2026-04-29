@@ -5,6 +5,7 @@ import { readFileSync, existsSync } from "node:fs"
 import { join } from "node:path"
 import { homedir } from "node:os"
 import type { SessionConfigEvent } from "./types.js"
+import { hasNonBlockingTool } from "./tools/index.js"
 import { log, warn } from "./log.js"
 
 const BRAIN_WORKSPACE = process.env.BRAIN_WORKSPACE
@@ -41,7 +42,7 @@ const CONVERSATION_RULES = `
 - Don't ask "anything else?" — instead, bring up the next relevant topic from context.
 `.trim()
 
-const BRAIN_CAPABILITIES = `
+const BRAIN_INTRO = `
 ## Your Brain (ask_brain tool)
 
 You have an ask_brain tool that connects to your brain agent. Your brain is where ALL of your capabilities live. You MUST use it for anything beyond basic conversation. Your brain can:
@@ -55,7 +56,9 @@ You have an ask_brain tool that connects to your brain agent. Your brain is wher
 When in doubt, ask your brain. You are a voice interface to a powerful agent — don't try to answer from your own limited context when your brain has the full picture.
 
 **NEVER say "I can't do that" or "I don't have access to that" before checking with your brain.** You don't know your own capabilities — your brain does. Always try first. Say "Let me see what I can do..." and ask your brain. Only after the brain confirms something is impossible should you tell the user.
+`.trim()
 
+const BRAIN_ASYNC_RULES = `
 ## MANDATORY: Wait for action confirmations
 
 **Every ask_brain call is asynchronous and takes 5–20 seconds.** When you call ask_brain you immediately receive a placeholder ("Looking into it now…") — that is NOT the answer. The real result arrives later as a separate Brain agent result message in your context. Do not confuse the placeholder for the result.
@@ -68,7 +71,9 @@ Whether the call is a question (look up info, check calendar) or an action (open
 - **If the user asks "is it done?" before the confirmation arrives**, say "still pulling it up — give me a sec" rather than fabricating completion.
 
 This rule applies to ALL action verbs: open, send, create, book, schedule, message, delete, update, post, share, save. If the user asked you to *do* something, treat the response as pending until proven otherwise.
+`.trim()
 
+const BRAIN_MEMORY_RULES_BASE = `
 ## MANDATORY: Memory and History Queries
 
 **This is a hard rule with zero exceptions.** You do NOT have memory of past conversations. You do NOT know what happened earlier, yesterday, last week, or in any prior session. Your conversation context only contains the current session.
@@ -84,9 +89,9 @@ When the user asks ANYTHING about:
 You MUST call ask_brain FIRST. Say "Let me check on that..." and call the tool. Do NOT answer from your own knowledge or make anything up. Do NOT synthesize a plausible answer. Do NOT guess. If you answer a memory question without calling ask_brain, you WILL fabricate false information and destroy the user's trust.
 
 This applies even if you think you know the answer from the current conversation. Your brain has the complete history — you do not.
-
-**While ask_brain is still running** (5–20 seconds), do NOT start composing the answer in any form — no "Today we talked about…", no "I think we covered…", no warm-up sentence that begins answering. Two reasons: (1) you don't have the answer yet, and (2) anything you say in that gap is invention. Acceptable: short verbal bridges ("let me check…", "pulling it up…", "one sec…", brief silence). Unacceptable: any sentence whose meaning depends on the answer you don't yet have. Wait until the Brain agent result message lands in your context, then speak from it.
 `.trim()
+
+const BRAIN_MEMORY_ASYNC_TAIL = `**While ask_brain is still running** (5–20 seconds), do NOT start composing the answer in any form — no "Today we talked about…", no "I think we covered…", no warm-up sentence that begins answering. Two reasons: (1) you don't have the answer yet, and (2) anything you say in that gap is invention. Acceptable: short verbal bridges ("let me check…", "pulling it up…", "one sec…", brief silence). Unacceptable: any sentence whose meaning depends on the answer you don't yet have. Wait until the Brain agent result message lands in your context, then speak from it.`
 
 export function buildInstructions(config: SessionConfigEvent): string {
   const parts: string[] = []
@@ -95,7 +100,15 @@ export function buildInstructions(config: SessionConfigEvent): string {
     const identity = loadAgentIdentity(config.provider)
     log(`[instructions] Loaded agent identity (${identity.length} chars): ${identity.substring(0, 100)}...`)
     parts.push(identity)
-    parts.push(BRAIN_CAPABILITIES)
+    parts.push(BRAIN_INTRO)
+    const asyncToolsExposed = hasNonBlockingTool(config)
+    if (asyncToolsExposed) {
+      parts.push(BRAIN_ASYNC_RULES)
+    }
+    const memoryRules = asyncToolsExposed
+      ? `${BRAIN_MEMORY_RULES_BASE}\n\n${BRAIN_MEMORY_ASYNC_TAIL}`
+      : BRAIN_MEMORY_RULES_BASE
+    parts.push(memoryRules)
   } else {
     parts.push("You are a helpful voice assistant. Keep your responses conversational and concise.")
   }

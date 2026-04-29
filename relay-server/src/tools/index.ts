@@ -4,18 +4,24 @@
 
 import type { SessionConfigEvent } from "../types.js"
 
-// OpenAI Realtime API tool format
-interface RealtimeTool {
-  type: "function"
+export interface RelayToolDefinition {
   name: string
   description: string
   parameters: Record<string, unknown>
+  /**
+   * True = the adapter should hold the tool call open until the real result
+   * lands. The model receives the actual output as the function's response and
+   * can weave it into a single turn. False = the relay returns a synchronous
+   * placeholder and threads the real result back via `injectContext` later;
+   * the model must speak a verbal bridge while the tool runs.
+   */
+  blocking: boolean
 }
 
-const ECHO_TOOL: RealtimeTool = {
-  type: "function",
+const ECHO_TOOL: RelayToolDefinition = {
   name: "echo_tool",
   description: "Test tool that echoes back whatever you send it. Use this when the user asks to test tools.",
+  blocking: true,
   parameters: {
     type: "object",
     properties: {
@@ -28,10 +34,10 @@ const ECHO_TOOL: RealtimeTool = {
   },
 }
 
-const ASK_BRAIN: RealtimeTool = {
-  type: "function",
+const ASK_BRAIN: RelayToolDefinition = {
   name: "ask_brain",
   description: "Ask your brain agent for information, to perform tasks, or to look things up. Use this for anything that requires memory, web access, calendar, tasks, or knowledge beyond what you know. Also use this for deep analysis of articles or content the user shares — send the URL and your question together. Examples: 'What's on my calendar?', 'Create a task to...', 'Look up my open tickets', 'Remember that I decided to...', 'Analyze the article at https://...'",
+  blocking: false,
   parameters: {
     type: "object",
     properties: {
@@ -44,14 +50,10 @@ const ASK_BRAIN: RealtimeTool = {
   },
 }
 
-// Fast Tavily-backed lookup. Phrased to nudge the model toward web_search for
-// quick "what / when / who" factual questions and ask_brain for anything that
-// needs the user's own context (memory, calendar, tasks, files). Both tools
-// can coexist — the model picks based on the query.
-const WEB_SEARCH: RealtimeTool = {
-  type: "function",
+const WEB_SEARCH: RelayToolDefinition = {
   name: "web_search",
   description: "Fast public web lookup via Tavily. Use this for quick factual questions where the answer lives on the public web — current events, definitions, prices, scores, schedules, recent news, 'what is X', 'when did Y happen'. Much faster than ask_brain (typically 1-3s). Do NOT use for anything personal to the user (their calendar, tasks, memory, files) — those need ask_brain. Returns top results with title, url, and snippet, plus a short synthesized answer when available.",
+  blocking: true,
   parameters: {
     type: "object",
     properties: {
@@ -64,8 +66,8 @@ const WEB_SEARCH: RealtimeTool = {
   },
 }
 
-export function getTools(config: SessionConfigEvent): RealtimeTool[] {
-  const tools: RealtimeTool[] = [ECHO_TOOL]
+export function getRelayTools(config: SessionConfigEvent): RelayToolDefinition[] {
+  const tools: RelayToolDefinition[] = [ECHO_TOOL]
 
   if (config.brainAgent !== "none") {
     tools.push(ASK_BRAIN)
@@ -76,6 +78,34 @@ export function getTools(config: SessionConfigEvent): RealtimeTool[] {
   }
 
   return tools
+}
+
+// True when at least one tool the model can call returns its result via the
+// async placeholder + injectContext path. Used to gate prompt rules that only
+// matter when the model has to wait on out-of-band results.
+export function hasNonBlockingTool(config: SessionConfigEvent): boolean {
+  return getRelayTools(config).some((tool) => !tool.blocking)
+}
+
+export function findRelayTool(config: SessionConfigEvent, name: string): RelayToolDefinition | null {
+  return getRelayTools(config).find((tool) => tool.name === name) ?? null
+}
+
+// OpenAI Realtime API tool format
+interface RealtimeTool {
+  type: "function"
+  name: string
+  description: string
+  parameters: Record<string, unknown>
+}
+
+export function getTools(config: SessionConfigEvent): RealtimeTool[] {
+  return getRelayTools(config).map((tool) => ({
+    type: "function",
+    name: tool.name,
+    description: tool.description,
+    parameters: tool.parameters,
+  }))
 }
 
 // Resolve Tavily key from session config first, env as fallback. Exported so
@@ -96,15 +126,16 @@ interface GeminiFunctionDeclaration {
 }
 
 export function getGeminiTools(config: SessionConfigEvent): GeminiFunctionDeclaration[] {
-  return getTools(config).map((t) => ({
+  return getRelayTools(config).map((t) => ({
     name: t.name,
     description: t.description,
     parameters: t.parameters,
   }))
 }
 
-/** Handle synchronous server-side tools. Returns null for async tools like ask_brain and web_search. */
-export function handleToolCall(
+/** Run a server-side tool whose result is computed in-process. Returns null
+ * when the tool requires async out-of-process execution (handled by session). */
+export function executeSyncTool(
   name: string,
   args: string,
 ): string | null {
@@ -115,7 +146,6 @@ export function handleToolCall(
     }
     case "ask_brain":
     case "web_search":
-      // Handled asynchronously by session.ts
       return null
     default:
       return JSON.stringify({ error: `unknown tool: ${name}` })

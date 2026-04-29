@@ -2,7 +2,7 @@
 
 import WebSocket from "ws"
 import type { SessionConfigEvent } from "../types.js"
-import type { ProviderAdapter, SendToClient } from "./types.js"
+import type { AdapterCapabilities, ProviderAdapter, SendToClient } from "./types.js"
 import { buildInstructions } from "../instructions.js"
 import { getTools } from "../tools/index.js"
 import { buildHistorySplit, formatSummaryPreamble, type HistoryMessage } from "../history.js"
@@ -26,6 +26,7 @@ const ROTATION_INTERVAL_MS = parseInt(process.env.ROTATION_INTERVAL_MS ?? String
 const WATCHDOG_TIMEOUT_MS = 20_000 // 20 seconds with no audio out
 
 export class OpenAIAdapter implements ProviderAdapter {
+  readonly capabilities: AdapterCapabilities = { blockingToolResponse: true }
   private providerName: string
   private realtimeUrl: string
   private apiKeyEnv: string

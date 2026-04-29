@@ -5,7 +5,11 @@
 
 import { log, error as logError } from "../log.js"
 
-const TAVILY_ENDPOINT = "https://api.tavily.com/search"
+const DEFAULT_TAVILY_ENDPOINT = "https://api.tavily.com/search"
+
+function tavilyEndpoint(): string {
+  return process.env.TAVILY_ENDPOINT?.trim() || DEFAULT_TAVILY_ENDPOINT
+}
 
 // Cap the result count we hand back to the model. Tavily returns up to 10 by
 // default; 5 is plenty for voice-context summarization and keeps the tool
@@ -72,7 +76,7 @@ export async function webSearch(
   try {
     let response: Response
     try {
-      response = await fetch(TAVILY_ENDPOINT, {
+      response = await fetch(tavilyEndpoint(), {
         method: "POST",
         headers: {
           "Content-Type": "application/json",

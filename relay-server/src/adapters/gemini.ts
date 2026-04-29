@@ -2,7 +2,7 @@
 
 import WebSocket from "ws"
 import type { SessionConfigEvent } from "../types.js"
-import type { ProviderAdapter, SendToClient } from "./types.js"
+import type { AdapterCapabilities, ProviderAdapter, SendToClient } from "./types.js"
 import { buildInstructions } from "../instructions.js"
 import { getGeminiTools } from "../tools/index.js"
 import { buildHistorySplit, formatSummaryPreamble, formatRecentTurnsPreamble, type HistoryMessage } from "../history.js"
@@ -43,6 +43,7 @@ const GEMINI_VOICES = ["Puck", "Charon", "Kore", "Fenrir", "Aoede", "Leda", "Oru
 const DEFAULT_GEMINI_VOICE = "Zephyr"
 
 export class GeminiAdapter implements ProviderAdapter {
+  readonly capabilities: AdapterCapabilities = { blockingToolResponse: true }
   private upstream: WebSocket | null = null
   private sendToClient: SendToClient | null = null
   private config: SessionConfigEvent | null = null
