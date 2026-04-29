@@ -381,6 +381,10 @@ export class GeminiAdapter implements ProviderAdapter {
     return [...this.transcript]
   }
 
+  getResumePreamble() {
+    return this.resumePreamble
+  }
+
   disconnect() {
     this.disconnected = true
     this.clearWatchdog()

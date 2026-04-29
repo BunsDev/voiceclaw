@@ -55,11 +55,14 @@ export class OpenAIAdapter implements ProviderAdapter {
   private lastUpstreamAudioAtMs: number | null = null
   private firstAudioDeltaAtMs: number | null = null
   private turnWasInterrupted = false
-  // Conversation history populated on connect() and consumed once after the
-  // first session.update. Cleared after injection so rotations don't replay
-  // (they have their own summarizeTranscript() path).
+  // Conversation history that mirrors what the upstream session was
+  // configured with. Single source of truth for both the inject-once setup
+  // path and the tracer's per-turn input composition; rotation overwrites
+  // these with the fresh rotation summary so post-rotation traces don't
+  // report stale context.
   private resumeRecentTurns: HistoryMessage[] = []
   private resumeSummary: string | null = null
+  private resumeContextInjected = false
 
   constructor(options: OpenAICompatibleAdapterOptions = {}) {
     this.providerName = options.providerName ?? "openai"
@@ -79,6 +82,7 @@ export class OpenAIAdapter implements ProviderAdapter {
     const split = await buildHistorySplit(config.conversationHistory, "openai")
     this.resumeRecentTurns = split.recent
     this.resumeSummary = split.summary
+    this.resumeContextInjected = false
     if (split.recent.length > 0 || split.summary) {
       log(`[${this.providerName}] Resume context: recent=${split.recent.length} msgs, summary=${split.summary ? `${split.summary.length} chars` : "none"}`)
     }
@@ -160,6 +164,14 @@ export class OpenAIAdapter implements ProviderAdapter {
     return [...this.transcript]
   }
 
+  getResumePreamble() {
+    return this.resumeSummary ? formatSummaryPreamble(this.resumeSummary) : ""
+  }
+
+  getResumeHistory() {
+    return [...this.resumeRecentTurns]
+  }
+
   disconnect() {
     this.clearTimers()
     if (this.upstream && this.upstream.readyState !== WebSocket.CLOSED) {
@@ -214,15 +226,11 @@ export class OpenAIAdapter implements ProviderAdapter {
     })
   }
 
-  private configureSession(config: SessionConfigEvent, contextSummary?: string) {
+  private configureSession(config: SessionConfigEvent) {
     let instructions = buildInstructions(config)
 
     if (this.resumeSummary) {
       instructions += `\n\n${formatSummaryPreamble(this.resumeSummary)}`
-    }
-
-    if (contextSummary) {
-      instructions += `\n\n## Conversation Context (from previous session)\n${contextSummary}`
     }
 
     const tools = getTools(config)
@@ -236,6 +244,8 @@ export class OpenAIAdapter implements ProviderAdapter {
   }
 
   private injectResumeTurns() {
+    if (this.resumeContextInjected) return
+    this.resumeContextInjected = true
     if (this.resumeRecentTurns.length === 0) return
 
     log(`[${this.providerName}] Injecting ${this.resumeRecentTurns.length} recent turn(s) via conversation.item.create`)
@@ -250,9 +260,6 @@ export class OpenAIAdapter implements ProviderAdapter {
         },
       })
     }
-
-    this.resumeRecentTurns = []
-    this.resumeSummary = null
   }
 
   // Session rotation — seamlessly swap the upstream OpenAI session
@@ -263,20 +270,24 @@ export class OpenAIAdapter implements ProviderAdapter {
     log(`[${this.providerName}] Starting session rotation...`)
     this.sendToClient?.({ type: "session.rotating" })
 
-    // Summarize transcript for context injection
     const summary = this.summarizeTranscript()
     log(`[${this.providerName}] Transcript summary (${summary.length} chars): ${summary.substring(0, 100)}...`)
 
-    // Close old upstream
+    // Fold the just-closed session's transcript into the resume context that
+    // configureSession() reads — single source of truth so getResumePreamble
+    // and the next session.update both see the post-rotation summary.
+    this.resumeSummary = summary
+    this.resumeRecentTurns = []
+    this.resumeContextInjected = false
+
     if (this.upstream && this.upstream.readyState !== WebSocket.CLOSED) {
       this.upstream.close()
     }
     this.upstream = null
 
-    // Open new upstream with summary injected
     try {
-      await this.openUpstreamWithSummary(this.config, summary)
-      this.transcript = [] // Clear transcript for new session
+      await this.openUpstream(this.config)
+      this.transcript = []
       this.startRotationTimer()
       this.sendToClient?.({ type: "session.rotated", sessionId: `rotated-${Date.now()}` })
       log(`[${this.providerName}] Session rotation complete`)
@@ -286,51 +297,6 @@ export class OpenAIAdapter implements ProviderAdapter {
     } finally {
       this.isRotating = false
     }
-  }
-
-  private async openUpstreamWithSummary(config: SessionConfigEvent, summary: string): Promise<void> {
-    const apiKey = process.env[this.apiKeyEnv]
-    if (!apiKey) throw new Error(`${this.providerName} API key not configured`)
-
-    this.resetResponseState()
-
-    const model = config.model || this.defaultModel
-    const url = `${this.realtimeUrl}?model=${model}`
-
-    return new Promise((resolve, reject) => {
-      this.upstream = new WebSocket(url, {
-        headers: {
-          "Authorization": `Bearer ${apiKey}`,
-          ...this.authHeaders,
-        },
-      })
-
-      this.upstream.on("open", () => {
-        log(`[${this.providerName}] New upstream connected after rotation`)
-        this.configureSession(config, summary)
-        resolve()
-      })
-
-      this.upstream.on("message", (raw) => {
-        try {
-          this.handleUpstreamEvent(JSON.parse(String(raw)))
-        } catch (err) {
-          logError(`[${this.providerName}] Failed to parse upstream message:`, err)
-        }
-      })
-
-      this.upstream.on("error", (err) => {
-        logError(`[${this.providerName}] New upstream error:`, err.message)
-        reject(err)
-      })
-
-      this.upstream.on("close", (code, reason) => {
-        log(`[${this.providerName}] Upstream closed: ${code} ${String(reason)}`)
-        if (!this.isRotating) {
-          this.sendToClient?.({ type: "error", message: "upstream connection closed", code: 502 })
-        }
-      })
-    })
   }
 
   private summarizeTranscript(): string {

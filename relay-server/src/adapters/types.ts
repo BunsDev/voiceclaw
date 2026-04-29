@@ -2,6 +2,7 @@
 // Each STS provider (OpenAI, Gemini, etc.) implements this interface
 
 import type { SessionConfigEvent, RelayEvent } from "../types.js"
+import type { HistoryMessage } from "../history.js"
 
 export type SendToClient = (event: RelayEvent) => void
 
@@ -35,4 +36,20 @@ export interface ProviderAdapter {
 
   /** Clean up the upstream connection */
   disconnect(): void
+
+  /**
+   * Provider-specific text appended to the model's systemInstruction at setup
+   * (e.g. summary of older turns + recent-turn preamble). Empty string when
+   * no resume context was folded in. Used by the tracer to build a voice-turn
+   * trace whose system content matches what the model actually saw.
+   */
+  getResumePreamble?(): string
+
+  /**
+   * Recent verbatim turns the adapter injected into the conversation as
+   * separate items (not via systemInstruction). Empty array when the adapter
+   * folds history entirely into the preamble (Gemini) or no history was
+   * supplied.
+   */
+  getResumeHistory?(): HistoryMessage[]
 }

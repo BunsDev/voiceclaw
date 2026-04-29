@@ -17,6 +17,9 @@ import { randomUUID } from "node:crypto"
 import { context, trace, type Context } from "@opentelemetry/api"
 import { propagateAttributes, startObservation, type LangfuseGeneration, type LangfuseSpan, type LangfuseTool } from "@langfuse/tracing"
 import { isLangfuseEnabled } from "./langfuse.js"
+import type { HistoryMessage } from "../history.js"
+
+export type ChatMessage = { role: "system" | "user" | "assistant", content: string }
 
 // How long to keep the generation object around after endTurn() so trailing
 // usage.metrics / client.timing events from the same turn can still attach.
@@ -35,6 +38,16 @@ export class TurnTracer {
   // reader can see exactly what instructions Gemini / Grok Voice / OpenAI Realtime was
   // running under without cross-referencing the relay code.
   private sessionInstructions: string | null = null
+  // Provider-specific resume preamble (summary of older turns + recent turns
+  // that the adapter folds into the model's systemInstruction). Captured here
+  // so each voice-turn trace shows the full system content the model ran
+  // under, not just the call-time-constant base instructions.
+  private sessionPreamble: string | null = null
+  // Recent verbatim turns that the adapter injected into the conversation as
+  // separate items (e.g. OpenAI/Grok conversation.item.create). Surfaced as
+  // user/assistant messages between system and the current user turn so the
+  // trace mirrors the chat history the model actually saw.
+  private resumeHistory: HistoryMessage[] = []
 
   private activeGeneration: LangfuseGeneration | null = null
   private activeTurnId: string | null = null
@@ -88,7 +101,17 @@ export class TurnTracer {
     this.userId = userId
     this.model = model
     this.sessionInstructions = instructions
+    this.sessionPreamble = null
+    this.resumeHistory = []
     this.turnIndex = 0
+  }
+
+  setSessionPreamble(preamble: string | null) {
+    this.sessionPreamble = preamble && preamble.trim().length > 0 ? preamble : null
+  }
+
+  setResumeHistory(history: HistoryMessage[]) {
+    this.resumeHistory = history.length > 0 ? [...history] : []
   }
 
   startTurn() {
@@ -362,17 +385,17 @@ export class TurnTracer {
       this.activeTurnId = null
       return
     }
-    // Compose the input as a chat conversation including the system prompt
-    // Gemini / Grok Voice / OpenAI Realtime was configured with, so each trace is self-
-    // contained: a reader can see the full context the voice model ran under
-    // without cross-referencing the relay code.
-    const chatInput: Array<{ role: string; content: string }> = []
-    if (this.sessionInstructions) {
-      chatInput.push({ role: "system", content: this.sessionInstructions })
-    }
-    if (this.currentUserText) {
-      chatInput.push({ role: "user", content: this.currentUserText })
-    }
+    // Compose the input as a chat conversation matching what the realtime
+    // provider was configured with — base instructions plus any resume preamble
+    // folded into systemInstruction, plus recent verbatim turns the adapter
+    // injected as conversation items — so a reader sees the full context the
+    // voice model ran under without cross-referencing the relay code.
+    const chatInput = composeTurnInput(
+      this.sessionInstructions,
+      this.sessionPreamble,
+      this.resumeHistory,
+      this.currentUserText,
+    )
     const inputForSpan =
       chatInput.length > 0 ? chatInput : this.currentUserText || undefined
     // Tool spans may legitimately outlive the turn they started in — async tools
@@ -450,6 +473,28 @@ export class TurnTracer {
     p.generation.end()
     this.pendingEnds.delete(turnId)
   }
+}
+
+export function composeTurnInput(
+  baseInstructions: string | null,
+  sessionPreamble: string | null,
+  resumeHistory: HistoryMessage[],
+  currentUserText: string,
+): ChatMessage[] {
+  const chat: ChatMessage[] = []
+  const systemContent = [baseInstructions, sessionPreamble]
+    .filter((s): s is string => !!s && s.length > 0)
+    .join("\n\n")
+  if (systemContent.length > 0) {
+    chat.push({ role: "system", content: systemContent })
+  }
+  for (const turn of resumeHistory) {
+    if (turn.text) chat.push({ role: turn.role, content: turn.text })
+  }
+  if (currentUserText) {
+    chat.push({ role: "user", content: currentUserText })
+  }
+  return chat
 }
 
 function safeParse(s: string): unknown {
