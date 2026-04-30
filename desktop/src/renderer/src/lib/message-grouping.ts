@@ -12,7 +12,6 @@ export type GroupedItem =
       message: Message
       isFirstInBurst: boolean
       isLastInBurst: boolean
-      showTimestamp: boolean
     }
 
 export const DEFAULT_BURST_THRESHOLD_MS = 60_000
@@ -71,7 +70,6 @@ export function groupMessages(
       message: msg,
       isFirstInBurst: i === burstStart,
       isLastInBurst: !nextSameBurst,
-      showTimestamp: false,
     })
   }
 
@@ -145,9 +143,9 @@ function formatDaySeparator(ts: number, now: number): string {
 function formatBurstSeparator(ts: number, now: number): string {
   const diffMs = now - ts
   if (diffMs < 60_000) return 'just now'
-  const diffMin = Math.round(diffMs / 60_000)
+  const diffMin = Math.floor(diffMs / 60_000)
   if (diffMin < 60) return `${diffMin} min ago`
-  const diffHr = Math.round(diffMs / 3_600_000)
+  const diffHr = Math.floor(diffMs / 3_600_000)
   if (diffHr < 6) return `${diffHr} hr ago`
   return new Date(ts).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
 }

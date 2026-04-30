@@ -55,4 +55,4 @@ The toggle resets when you start a new conversation or restart the app. It's a t
 
 ## What the agent sees
 
-The grouping is purely a UI concern — it doesn't change what the agent receives. But the timing metadata is exposed to the agent so it can answer questions like _"what did we talk about five minutes ago?"_ Each historical turn the agent sees is tagged with a relative timestamp (`[3m ago]`, `[2h ago]`, `[1d ago]`) inside the conversation preamble. That's enough for the model to answer time-relative questions without having to guess from the transcript order alone.
+The grouping is purely a UI concern — it doesn't change what the assistant receives. But the assistant does get enough timing context to answer questions like _"what did we talk about five minutes ago?"_ without having to guess from the order alone.

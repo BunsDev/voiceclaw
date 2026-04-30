@@ -322,7 +322,6 @@ export function ChatPage() {
     const outputDeviceId = (await getSetting('output_device_id')) || undefined
 
     const convId = conversationIdRef.current
-    const nowMs = Date.now()
     const conversationHistory = convId
       ? (await getMessages(convId))
           .filter((m) => m.role === 'user' || m.role === 'assistant')
@@ -331,7 +330,6 @@ export function ChatPage() {
             role: m.role as 'user' | 'assistant',
             text: m.content,
             timestamp: m.created_at,
-            relativeMs: Math.max(0, nowMs - m.created_at),
           }))
       : []
 

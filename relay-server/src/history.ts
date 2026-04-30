@@ -59,7 +59,7 @@ export function formatRecentTurnsPreamble(recent: HistoryMessage[]): string {
       const text = typeof m.text === "string" ? m.text.trim() : ""
       if (!text) return null
       const speaker = m.role === "assistant" ? "Assistant" : "User"
-      const stamp = formatRelativeStamp(m.relativeMs)
+      const stamp = formatRelativeStamp(deriveRelativeMs(m))
       return stamp ? `${stamp} ${speaker}: ${text}` : `${speaker}: ${text}`
     })
     .filter((l): l is string => l !== null)
@@ -192,15 +192,21 @@ async function fetchWithTimeout(
   }
 }
 
+function deriveRelativeMs(m: HistoryMessage): number | undefined {
+  if (typeof m.relativeMs === "number") return m.relativeMs
+  if (typeof m.timestamp === "number") return Math.max(0, Date.now() - m.timestamp)
+  return undefined
+}
+
 function formatRelativeStamp(relativeMs: number | undefined): string | null {
   if (typeof relativeMs !== "number" || relativeMs < 0) return null
-  const sec = Math.round(relativeMs / 1000)
+  const sec = Math.floor(relativeMs / 1000)
   if (sec < 60) return `[${sec}s ago]`
-  const min = Math.round(sec / 60)
+  const min = Math.floor(sec / 60)
   if (min < 60) return `[${min}m ago]`
-  const hr = Math.round(min / 60)
+  const hr = Math.floor(min / 60)
   if (hr < 24) return `[${hr}h ago]`
-  const day = Math.round(hr / 24)
+  const day = Math.floor(hr / 24)
   return `[${day}d ago]`
 }
 
