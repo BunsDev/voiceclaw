@@ -217,7 +217,7 @@ export function StepProvider({
               onClick={() => setShowKey((prev) => !prev)}
               aria-label={showKey ? 'Hide API key' : 'Show API key'}
               aria-pressed={showKey}
-              className="absolute right-3 top-1/2 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-[10px] transition-colors hover:bg-[var(--panel)] focus:bg-[var(--panel)] focus:outline-none"
+              className="absolute right-3 top-1/2 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-[10px] transition-colors hover:bg-[var(--panel)] focus:bg-[var(--panel)] focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-1 focus-visible:ring-[var(--ink)]"
               style={{ color: 'var(--muted)' }}
             >
               {showKey ? (
