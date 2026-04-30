@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { Eye, EyeOff } from 'lucide-react'
 import { StepFrame } from './StepFrame'
 import {
   providerApi,
@@ -69,6 +70,7 @@ export function StepProvider({
     PROVIDERS.some((p) => p.id === initialProvider) ? initialProvider : 'gemini',
   )
   const [apiKey, setApiKey] = useState('')
+  const [showKey, setShowKey] = useState(false)
   const [validation, setValidation] = useState<ValidationState>({ kind: 'empty' })
   const active = PROVIDERS.find((p) => p.id === selected) ?? PROVIDERS[0]
 
@@ -147,6 +149,7 @@ export function StepProvider({
             onSelect={() => {
               setSelected(provider.id)
               setApiKey('')
+              setShowKey(false)
               setValidation({ kind: 'empty' })
             }}
           />
@@ -189,9 +192,9 @@ export function StepProvider({
         </div>
 
         <div className="mt-5 flex items-stretch gap-3">
-          <div className="flex-1">
+          <div className="relative flex-1">
             <input
-              type="password"
+              type={showKey ? 'text' : 'password'}
               value={apiKey}
               onChange={(e) => handleKeyChange(e.target.value)}
               onBlur={() => {
@@ -200,7 +203,7 @@ export function StepProvider({
                 }
               }}
               placeholder={active.placeholder}
-              className="w-full rounded-[14px] border px-5 py-4 text-[15px] outline-none transition-colors focus:border-[var(--ink)]"
+              className="w-full rounded-[14px] border py-4 pl-5 pr-14 text-[15px] outline-none transition-colors focus:border-[var(--ink)]"
               style={{
                 fontFamily: 'var(--font-mono)',
                 borderColor: 'var(--line-strong)',
@@ -209,6 +212,20 @@ export function StepProvider({
                 letterSpacing: '0.04em',
               }}
             />
+            <button
+              type="button"
+              onClick={() => setShowKey((prev) => !prev)}
+              aria-label={showKey ? 'Hide API key' : 'Show API key'}
+              aria-pressed={showKey}
+              className="absolute right-3 top-1/2 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-[10px] transition-colors hover:bg-[var(--panel)] focus:bg-[var(--panel)] focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-1 focus-visible:ring-[var(--ink)]"
+              style={{ color: 'var(--muted)' }}
+            >
+              {showKey ? (
+                <EyeOff className="h-4 w-4" aria-hidden="true" />
+              ) : (
+                <Eye className="h-4 w-4" aria-hidden="true" />
+              )}
+            </button>
           </div>
           <ValidationBadge state={validation} />
         </div>
