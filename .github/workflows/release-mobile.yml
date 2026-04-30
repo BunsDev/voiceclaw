@@ -1,0 +1,133 @@
+# Build the iOS app and (optionally) submit to TestFlight on mobile tag push.
+#
+# Trigger: push of a tag matching `mobile-v*.*.*` (e.g. `mobile-v1.1.2`).
+# Output: an EAS cloud build for the staging profile, and — if the submit
+#         step is enabled — a TestFlight upload via App Store Connect.
+#
+# STATUS: scaffold. The job will fail until the secrets below are populated
+# in repo Settings -> Secrets and variables -> Actions. Mobile builds today
+# are still produced by running `yarn ios:release:staging` locally on the
+# Mac that holds the Apple developer cert. This workflow exists so the
+# `mobile-v*` tag push (created by release-please) has a downstream listener.
+#
+# Required repository secrets:
+#   EXPO_TOKEN
+#     Personal access token from `eas whoami --token` (after `eas login`).
+#     Authorizes `eas build` and `eas submit` against the EAS account that
+#     owns the `voiceclaw` Expo project.
+#
+# Required for `eas submit` (App Store Connect upload). The desktop release
+# workflow already uses an ASC API key under these secret names, and we
+# reuse them here:
+#   APPLE_API_KEY_P8   Base64-encoded contents of the .p8 file. Generate with
+#                      `base64 -i AuthKey_<ID>.p8 | pbcopy`.
+#   APPLE_API_KEY_ID   The ASC API key id (e.g. `SG645CPQP8`).
+#   APPLE_API_ISSUER   The ASC issuer UUID
+#                      (e.g. `69a6de83-015f-47e3-e053-5b8c7c11a4d1`).
+#
+# `eas.json` -> submit.staging already references
+# `ascApiKeyPath: ~/.appstore/AuthKey_SG645CPQP8.p8`, so the submit step
+# below materializes the .p8 to that path before invoking eas submit.
+#
+# Alternative legacy auth (NOT used by this workflow):
+#   APPLE_ID + APPLE_APP_SPECIFIC_PASSWORD (generated at appleid.apple.com).
+# Only worth setting if the ASC API key path stops working.
+
+name: Release mobile
+
+on:
+  push:
+    tags:
+      - "mobile-v*.*.*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to build (must already exist on origin)"
+        required: true
+      submit:
+        description: "Also submit the IPA to TestFlight"
+        required: false
+        default: "false"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: EAS build (staging)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Enable corepack
+        run: corepack enable
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "yarn"
+
+      - name: Install dependencies
+        run: yarn install --immutable
+
+      - name: Trigger EAS build (staging, no-wait)
+        working-directory: mobile
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: |
+          npx eas-cli@latest build \
+            --platform ios \
+            --profile staging \
+            --non-interactive \
+            --no-wait
+
+  submit:
+    name: EAS submit (staging)
+    needs: build
+    if: ${{ github.event_name == 'push' || inputs.submit == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Enable corepack
+        run: corepack enable
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "yarn"
+
+      - name: Install dependencies
+        run: yarn install --immutable
+
+      - name: Write App Store Connect API key
+        env:
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+        run: |
+          mkdir -p ~/.appstore
+          printf '%s' "$APPLE_API_KEY_P8" | base64 --decode > ~/.appstore/AuthKey_${APPLE_API_KEY_ID}.p8
+          chmod 600 ~/.appstore/AuthKey_${APPLE_API_KEY_ID}.p8
+
+      - name: Submit latest staging build to TestFlight
+        working-directory: mobile
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: |
+          npx eas-cli@latest submit \
+            --platform ios \
+            --profile staging \
+            --latest \
+            --non-interactive

@@ -31,7 +31,11 @@
       "package-name": "voiceclaw-mobile",
       "component": "mobile",
       "include-component-in-tag": true,
-      "changelog-path": "CHANGELOG.md"
+      "changelog-path": "CHANGELOG.md",
+      "extra-files": [
+        { "type": "generic", "path": "app.config.ts" },
+        { "type": "json", "path": "app.json", "jsonpath": "$.expo.version" }
+      ]
     }
   }
 }

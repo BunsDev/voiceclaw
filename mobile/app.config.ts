@@ -24,7 +24,8 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   ...config,
   name: 'VoiceClaw',
   slug: 'voiceclaw',
-  version: '1.0.0',
+  // x-release-please-version
+  version: '1.1.2',
   orientation: 'portrait',
   icon: './assets/images/icon.png',
   scheme: variant.scheme,
