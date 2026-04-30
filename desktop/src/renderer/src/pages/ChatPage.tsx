@@ -10,6 +10,7 @@ import { VolumeControl } from '../components/VolumeControl'
 import { ToolCallRow } from '../components/ToolCallRow'
 import { ScreenCapture, type ScreenSource } from '../lib/screen-capture'
 import { useRealtime, type RealtimeCallbacks } from '../lib/use-realtime'
+import { captureRenderer } from '../lib/telemetry'
 import { useConversationContext } from '../lib/conversation-context'
 import {
   applyToolCallStarted,
@@ -60,6 +61,8 @@ export function ChatPage() {
   const [screenSourceName, setScreenSourceName] = useState('')
   const screenCaptureRef = useRef<ScreenCapture | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
+  const activeRelayUrlRef = useRef<string>('')
+  const brainCallStartRef = useRef<Map<string, number>>(new Map())
   const { selectedConversationId, selectConversation } = useConversationContext()
 
   // Reload messages from DB — single source of truth, prevents duplicates.
@@ -167,6 +170,7 @@ export function ChatPage() {
       setIsThinking(false)
     },
     onToolCall: async (callId, name, args) => {
+      if (name === 'ask_brain') brainCallStartRef.current.set(callId, Date.now())
       setToolCalls((prev) => applyToolCallStarted(prev, callId, name, args))
       if (name === 'displayText') {
         try {
@@ -193,7 +197,15 @@ export function ChatPage() {
       setStreamingRole('assistant')
       setStreamingText(summary)
     },
-    onBrainResult: async (_callId, query, result, error) => {
+    onBrainResult: async (callId, query, result, error) => {
+      if (error) {
+        const startedAt = brainCallStartRef.current.get(callId)
+        const duration_ms = startedAt != null ? Date.now() - startedAt : 0
+        brainCallStartRef.current.delete(callId)
+        captureRenderer('brain_failed', { error_type: error, duration_ms })
+      } else {
+        brainCallStartRef.current.delete(callId)
+      }
       const body = error
         ? `[Brain] Failed for "${query}": ${error}`
         : `[Brain] ${result ?? ''}`
@@ -215,8 +227,11 @@ export function ChatPage() {
       setStreamingText('')
       streamingRoleRef.current = 'assistant'
     },
-    onError: (message) => {
+    onError: (message, code) => {
       console.error('[ChatPage] Relay error:', message)
+      if (code === 401) {
+        captureRenderer('relay_unauthorized', { relay_url: activeRelayUrlRef.current })
+      }
       setConnectionError(message)
       setIsConnecting(false)
       setIsCallActive(false)
@@ -241,6 +256,7 @@ export function ChatPage() {
     setIsConnecting(true)
     setOutputMuted(false)
     const serverUrl = (await getSetting('realtime_server_url')) || (await defaultRelayUrl())
+    activeRelayUrlRef.current = serverUrl
     const model = normalizeRealtimeModel(await getSetting('realtime_model'))
     const voice = normalizeRealtimeVoice(model, await getSetting('realtime_voice'))
     const apiKey = (await getSetting('realtime_api_key')) || ''
