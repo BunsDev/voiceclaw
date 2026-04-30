@@ -109,10 +109,24 @@ export function StepSignIn({
           </p>
 
           {state.kind === 'pending' ? (
-            <StatusLine
-              tone="info"
-              text={`Waiting for ${state.provider} sign-in to finish in your browser…`}
-            />
+            <div className="flex items-center gap-3">
+              <StatusLine
+                tone="info"
+                text={`Waiting for ${state.provider} sign-in to finish in your browser…`}
+              />
+              <button
+                onClick={() => setState({ kind: 'idle' })}
+                className="shrink-0 rounded-[10px] border px-3 py-2 text-[12px] transition-opacity hover:opacity-70"
+                style={{
+                  borderColor: 'var(--line-strong)',
+                  backgroundColor: 'var(--panel-strong)',
+                  color: 'var(--muted)',
+                  fontFamily: 'var(--font-sans)',
+                }}
+              >
+                Cancel
+              </button>
+            </div>
           ) : null}
           {state.kind === 'error' ? <StatusLine tone="error" text={state.error} /> : null}
           {state.kind === 'success' ? (
@@ -275,7 +289,7 @@ function StatusLine({ tone, text }: { tone: 'info' | 'ok' | 'error'; text: strin
 
 function humanizeAuthError(raw: string): string {
   if (raw.startsWith('redeem_failed_501')) {
-    return "Sign-in isn't fully wired in this build. Skip for now — your keys still work."
+    return 'Sign-in is temporarily unavailable — the server is not ready. Try again in a moment, or skip and use your API keys.'
   }
   if (raw.startsWith('redeem_failed_410')) return 'That sign-in link already expired. Try again.'
   if (raw.startsWith('redeem_failed_404')) return "That sign-in link wasn't found."
