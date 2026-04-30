@@ -39,10 +39,27 @@ const themeScript = `
 })()
 `
 
+const SITE_URL = "https://voiceclaw.io"
+const SITE_TITLE = "VoiceClaw - Voice for the Agent You Already Trust"
+const SITE_DESCRIPTION =
+  "VoiceClaw is an open source voice layer for your own agent on iPhone and Mac."
+
 export const metadata: Metadata = {
-  title: "VoiceClaw - Voice for the Agent You Already Trust",
-  description:
-    "VoiceClaw is an open source voice layer for your own agent on iPhone and Mac.",
+  metadataBase: new URL(SITE_URL),
+  title: SITE_TITLE,
+  description: SITE_DESCRIPTION,
+  openGraph: {
+    type: "website",
+    url: SITE_URL,
+    siteName: "VoiceClaw",
+    title: SITE_TITLE,
+    description: SITE_DESCRIPTION,
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: SITE_TITLE,
+    description: SITE_DESCRIPTION,
+  },
 }
 
 export default function RootLayout({
