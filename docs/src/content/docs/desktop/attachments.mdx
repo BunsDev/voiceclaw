@@ -24,8 +24,8 @@ In all three cases the image lands in a small **pending tray** at the bottom of 
 When you send pending attachments:
 
 1. A new user message is added to the conversation with a short placeholder (e.g. `Attached: photo.png`). This is what the conversation list and history will show as the message body.
-2. Each image is persisted alongside the message in the local SQLite database. Images at or under 5 MB are stored inline as base64; larger files (up to the 10 MB ceiling) are written to a file under your Electron `userData/attachments` directory and referenced by path. The behaviour is automatic — you don't pick storage manually.
-3. If a call is active, the image is also forwarded to the assistant in the same way a screen-share frame is, so the model can see and reason about the image during the call.
+2. Each image is saved locally with the message — you don't configure anything.
+3. If a call is active, the image is also forwarded to the assistant the same way a shared screen would be, so the model can see and reason about it during the call.
 
 The thumbnails render inline in the chat bubble. Click a thumbnail to open the image full-size in a new window.
 

@@ -204,12 +204,7 @@ export async function pickImageAttachment(): Promise<PickImageResult> {
 }
 
 export function attachmentDataUrl(attachment: Attachment): string | null {
-  if (attachment.storage === 'inline' && attachment.data) {
-    return `data:${attachment.mime};base64,${attachment.data}`
-  }
-  if (attachment.storage === 'file' && attachment.path) {
-    return `file://${attachment.path}`
-  }
+  if (attachment.data) return `data:${attachment.mime};base64,${attachment.data}`
   return null
 }
 

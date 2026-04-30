@@ -332,16 +332,17 @@ export function registerIpcHandlers() {
 
   ipcMain.handle('db:getAttachmentsForMessage', (_e, messageId: number) => {
     const db = getDb()
-    return db
+    const rows = db
       .prepare(
         'SELECT * FROM message_attachments WHERE message_id = ? ORDER BY created_at ASC, id ASC',
       )
       .all(messageId) as AttachmentRecord[]
+    return rows.map(hydrateAttachmentData)
   })
 
   ipcMain.handle('db:getAttachmentsForConversation', (_e, conversationId: number) => {
     const db = getDb()
-    return db
+    const rows = db
       .prepare(
         `SELECT a.* FROM message_attachments a
           JOIN messages m ON m.id = a.message_id
@@ -349,6 +350,7 @@ export function registerIpcHandlers() {
           ORDER BY a.created_at ASC, a.id ASC`,
       )
       .all(conversationId) as AttachmentRecord[]
+    return rows.map(hydrateAttachmentData)
   })
 
   ipcMain.handle('attachments:pickImage', async () => {
@@ -568,6 +570,16 @@ export function registerIpcHandlers() {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+function hydrateAttachmentData(row: AttachmentRecord): AttachmentRecord {
+  if (row.storage !== 'file' || !row.path || row.data) return row
+  try {
+    const buf = readFileSync(row.path)
+    return { ...row, data: buf.toString('base64') }
+  } catch {
+    return row
+  }
+}
 
 function mimeForPath(path: string): string | null {
   const ext = extname(path).toLowerCase()
