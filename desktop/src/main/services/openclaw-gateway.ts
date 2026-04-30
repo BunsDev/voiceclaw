@@ -1,8 +1,10 @@
 import { app } from 'electron'
+import { spawn } from 'child_process'
 import { randomUUID } from 'crypto'
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
 import { dirname, join } from 'path'
 import { allocatePort } from '../ports'
+import { openLogStream } from '../logs'
 import { resolveBundledNode } from './node-runtime'
 import { serviceManager } from './service-manager'
 
@@ -20,8 +22,16 @@ export async function startBundledOpenClaw(): Promise<void> {
 
   const stateDir = join(app.getPath('userData'), 'openclaw')
   const configPath = join(stateDir, 'openclaw.json')
+  const workspaceDir = join(stateDir, 'workspace')
   ensureSeededConfig(configPath)
   ensureGatewayAuthToken(configPath)
+  await ensureWorkspaceBootstrap({
+    nodePath,
+    scriptPath,
+    stateDir,
+    configPath,
+    workspaceDir,
+  })
 
   const port = await allocatePort('openclawGateway')
 
@@ -65,6 +75,60 @@ export function getOpenClawConfigPath(): string {
   return join(app.getPath('userData'), 'openclaw', 'openclaw.json')
 }
 
+export const BUNDLED_GOOGLE_PRIMARY_MODEL = 'google/gemini-3.1-pro-preview'
+
+export function applyGeminiKeyToOpenClawConfig(geminiKey: string): boolean {
+  const configPath = getOpenClawConfigPath()
+  let parsed: Record<string, unknown> = {}
+  if (existsSync(configPath)) {
+    try {
+      parsed = JSON.parse(readFileSync(configPath, 'utf8')) as Record<string, unknown>
+    } catch {
+      parsed = {}
+    }
+  } else {
+    mkdirSync(dirname(configPath), { recursive: true })
+  }
+
+  const before = JSON.stringify(parsed)
+
+  const models = (parsed.models as Record<string, unknown> | undefined) ?? {}
+  const providers = (models.providers as Record<string, unknown> | undefined) ?? {}
+  const google = (providers.google as Record<string, unknown> | undefined) ?? {}
+  google.apiKey = geminiKey
+  providers.google = google
+  models.providers = providers
+  if (typeof models.mode !== 'string') models.mode = 'merge'
+  parsed.models = models
+
+  const agents = (parsed.agents as Record<string, unknown> | undefined) ?? {}
+  const defaults = (agents.defaults as Record<string, unknown> | undefined) ?? {}
+  const existingModel = defaults.model as Record<string, unknown> | string | undefined
+  const fallbacks =
+    existingModel && typeof existingModel === 'object' && Array.isArray(existingModel.fallbacks)
+      ? (existingModel.fallbacks as unknown[])
+      : undefined
+  defaults.model = {
+    ...(fallbacks ? { fallbacks } : {}),
+    primary: BUNDLED_GOOGLE_PRIMARY_MODEL,
+  }
+  agents.defaults = defaults
+  parsed.agents = agents
+
+  const plugins = (parsed.plugins as Record<string, unknown> | undefined) ?? {}
+  const entries = (plugins.entries as Record<string, unknown> | undefined) ?? {}
+  const googlePlugin = (entries.google as Record<string, unknown> | undefined) ?? {}
+  googlePlugin.enabled = true
+  entries.google = googlePlugin
+  plugins.entries = entries
+  parsed.plugins = plugins
+
+  const after = JSON.stringify(parsed)
+  if (before === after) return false
+  writeFileSync(configPath, JSON.stringify(parsed, null, 2) + '\n', { mode: 0o600 })
+  return true
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -78,6 +142,63 @@ function ensureSeededConfig(configPath: string): void {
   }
   mkdirSync(dirname(configPath), { recursive: true })
   copyFileSync(template, configPath)
+}
+
+async function ensureWorkspaceBootstrap(params: {
+  nodePath: string
+  scriptPath: string
+  stateDir: string
+  configPath: string
+  workspaceDir: string
+}): Promise<void> {
+  const sentinelPath = join(params.stateDir, 'workspace-bootstrapped')
+  if (existsSync(sentinelPath)) return
+  if (existsSync(join(params.workspaceDir, 'IDENTITY.md'))) {
+    writeFileSync(sentinelPath, new Date().toISOString() + '\n')
+    return
+  }
+  mkdirSync(params.workspaceDir, { recursive: true })
+  const logStream = openLogStream('openclaw-setup.log')
+  logStream.write(`\n[openclaw-setup] running setup at ${new Date().toISOString()}\n`)
+  await new Promise<void>((resolve) => {
+    const child = spawn(
+      params.nodePath,
+      [params.scriptPath, 'setup', '--workspace', params.workspaceDir],
+      {
+        env: {
+          ...process.env,
+          OPENCLAW_STATE_DIR: params.stateDir,
+          OPENCLAW_CONFIG_PATH: params.configPath,
+        },
+        stdio: ['ignore', 'pipe', 'pipe'],
+        detached: false,
+      },
+    )
+    child.stdout?.pipe(logStream, { end: false })
+    child.stderr?.pipe(logStream, { end: false })
+    let settled = false
+    const settle = (note: string) => {
+      if (settled) return
+      settled = true
+      clearTimeout(killTimer)
+      logStream.write(`\n[openclaw-setup] ${note}\n`)
+      resolve()
+    }
+    const killTimer = setTimeout(() => {
+      try {
+        child.kill('SIGTERM')
+      } catch {
+        // best-effort
+      }
+      settle('timed out after 30s; gateway will still start with partial bootstrap')
+    }, 30_000)
+    killTimer.unref()
+    child.once('error', (err) => settle(`spawn error: ${err.message}`))
+    child.once('exit', (code) => settle(`exit code=${code ?? 'null'}`))
+  })
+  if (existsSync(join(params.workspaceDir, 'IDENTITY.md'))) {
+    writeFileSync(sentinelPath, new Date().toISOString() + '\n')
+  }
 }
 
 function resolveConfigTemplate(): string | null {

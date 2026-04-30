@@ -2,6 +2,7 @@ import { app } from 'electron'
 import { existsSync } from 'fs'
 import { join } from 'path'
 import { allocatePort } from '../ports'
+import { getBundledRelayApiKey } from '../onboarding'
 import { getProviderKey, type ProviderId } from '../provider-keys'
 import { resolveBundledNode } from './node-runtime'
 import { getOpenClawConfigPath, readGatewayAuthToken } from './openclaw-gateway'
@@ -53,6 +54,10 @@ export function buildRelayEnv(): NodeJS.ProcessEnv {
   if (!env.BRAIN_GATEWAY_AUTH_TOKEN) {
     const token = readGatewayAuthToken(getOpenClawConfigPath())
     if (token) env.BRAIN_GATEWAY_AUTH_TOKEN = token
+  }
+  if (!env.RELAY_API_KEY) {
+    const bundledKey = getBundledRelayApiKey()
+    if (bundledKey) env.RELAY_API_KEY = bundledKey
   }
   // Tavily is stored in the renderer-side settings KV today, not the
   // provider-keys vault, so the relay reads it from process.env via the

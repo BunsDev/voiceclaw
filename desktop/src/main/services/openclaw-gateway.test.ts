@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 const isPackagedRef = { value: false }
 const existsRef = { fn: (_p: string) => false as boolean }
 const readFileRef = { fn: (_p: string, _enc: string) => '{}' }
+const writes: { path: string; content: string }[] = []
 let originalResourcesPath: string | undefined
 
 vi.mock('electron', () => ({
@@ -19,7 +20,9 @@ vi.mock('fs', () => ({
   copyFileSync: () => undefined,
   mkdirSync: () => undefined,
   readFileSync: (path: string, enc: string) => readFileRef.fn(path, enc),
-  writeFileSync: () => undefined,
+  writeFileSync: (path: string, content: string) => {
+    writes.push({ path, content })
+  },
 }))
 
 describe('resolveBundledOpenClawScript', () => {
@@ -111,5 +114,90 @@ describe('readGatewayAuthToken', () => {
 
     readFileRef.fn = () => JSON.stringify({ gateway: { auth: { token: 123 } } })
     expect(readGatewayAuthToken('/x.json')).toBeNull()
+  })
+})
+
+describe('applyGeminiKeyToOpenClawConfig', () => {
+  beforeEach(() => {
+    writes.length = 0
+    existsRef.fn = () => false
+    readFileRef.fn = () => '{}'
+  })
+
+  afterEach(() => {
+    vi.resetModules()
+  })
+
+  it('writes provider key, primary model, and plugin enable when no config exists', async () => {
+    existsRef.fn = () => false
+    const { applyGeminiKeyToOpenClawConfig, BUNDLED_GOOGLE_PRIMARY_MODEL } = await import(
+      './openclaw-gateway'
+    )
+    const changed = applyGeminiKeyToOpenClawConfig('AIzaTESTKEY')
+    expect(changed).toBe(true)
+    expect(writes.length).toBe(1)
+    const written = JSON.parse(writes[0].content)
+    expect(written.models.providers.google.apiKey).toBe('AIzaTESTKEY')
+    expect(written.agents.defaults.model.primary).toBe(BUNDLED_GOOGLE_PRIMARY_MODEL)
+    expect(written.plugins.entries.google.enabled).toBe(true)
+  })
+
+  it('preserves existing fallbacks when overwriting the primary model', async () => {
+    existsRef.fn = () => true
+    readFileRef.fn = () =>
+      JSON.stringify({
+        agents: {
+          defaults: {
+            model: {
+              primary: 'openai-codex/gpt-5.4',
+              fallbacks: ['claude-cli/claude-haiku-4-5'],
+            },
+          },
+        },
+      })
+    const { applyGeminiKeyToOpenClawConfig, BUNDLED_GOOGLE_PRIMARY_MODEL } = await import(
+      './openclaw-gateway'
+    )
+    applyGeminiKeyToOpenClawConfig('newkey')
+    const written = JSON.parse(writes[0].content)
+    expect(written.agents.defaults.model.primary).toBe(BUNDLED_GOOGLE_PRIMARY_MODEL)
+    expect(written.agents.defaults.model.fallbacks).toEqual(['claude-cli/claude-haiku-4-5'])
+  })
+
+  it('returns false (no write) when the same key is already in place', async () => {
+    existsRef.fn = () => true
+    readFileRef.fn = () =>
+      JSON.stringify({
+        models: {
+          mode: 'merge',
+          providers: { google: { apiKey: 'samekey' } },
+        },
+        agents: {
+          defaults: {
+            model: { primary: 'google/gemini-3.1-pro-preview' },
+          },
+        },
+        plugins: { entries: { google: { enabled: true } } },
+      })
+    const { applyGeminiKeyToOpenClawConfig } = await import('./openclaw-gateway')
+    const changed = applyGeminiKeyToOpenClawConfig('samekey')
+    expect(changed).toBe(false)
+    expect(writes.length).toBe(0)
+  })
+
+  it('does not clobber unrelated channel/auth config blocks', async () => {
+    existsRef.fn = () => true
+    readFileRef.fn = () =>
+      JSON.stringify({
+        channels: { telegram: { enabled: true, botToken: 't' } },
+        auth: { profiles: { 'openai-codex:me': { mode: 'oauth' } } },
+        gateway: { auth: { mode: 'token', token: 'x' } },
+      })
+    const { applyGeminiKeyToOpenClawConfig } = await import('./openclaw-gateway')
+    applyGeminiKeyToOpenClawConfig('k')
+    const written = JSON.parse(writes[0].content)
+    expect(written.channels.telegram.botToken).toBe('t')
+    expect(written.auth.profiles['openai-codex:me'].mode).toBe('oauth')
+    expect(written.gateway.auth.token).toBe('x')
   })
 })

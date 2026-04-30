@@ -1,3 +1,4 @@
+import { randomUUID } from 'crypto'
 import { getDb } from './db'
 
 // Onboarding state — single-row table (id=1) capturing the wizard's
@@ -104,6 +105,39 @@ export function markOnboardingComplete(): OnboardingState {
   const db = getDb()
   db.prepare('UPDATE onboarding_state SET completed_at = ? WHERE id = 1').run(completedAt)
   return { ...getOnboardingState(), completedAt }
+}
+
+export type BundledDefaults = {
+  relayApiKey: string
+  serverUrlPlaceholder: string | null
+}
+
+export function ensureBundledRelayDefaults(options: { force?: boolean } = {}): BundledDefaults {
+  ensureOnboardingSchema()
+  const db = getDb()
+  const existing = db
+    .prepare('SELECT value FROM settings WHERE key = ?')
+    .get('realtime_api_key') as { value: string } | undefined
+  let apiKey = existing?.value ?? ''
+  if (options.force || !apiKey) {
+    apiKey = randomUUID()
+    db.prepare(
+      'INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = ?',
+    ).run('realtime_api_key', apiKey, apiKey)
+  }
+  if (options.force) {
+    db.prepare('DELETE FROM settings WHERE key = ?').run('realtime_server_url')
+  }
+  return { relayApiKey: apiKey, serverUrlPlaceholder: null }
+}
+
+export function getBundledRelayApiKey(): string | null {
+  ensureOnboardingSchema()
+  const db = getDb()
+  const row = db
+    .prepare('SELECT value FROM settings WHERE key = ?')
+    .get('realtime_api_key') as { value: string } | undefined
+  return row?.value ?? null
 }
 
 export function resetOnboarding(): OnboardingState {

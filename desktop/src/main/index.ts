@@ -24,11 +24,19 @@ import {
   showCallBarContextMenu,
 } from './call-bar'
 import { serviceManager } from './services/service-manager'
-import { startBundledOpenClaw } from './services/openclaw-gateway'
+import {
+  applyGeminiKeyToOpenClawConfig,
+  startBundledOpenClaw,
+} from './services/openclaw-gateway'
 import { startBundledRelayServer } from './services/relay-server'
 import { ensureDefault as ensureLaunchAtLoginDefault } from './login-items'
 import { initAutoUpdater } from './updater'
-import { ensureOnboardingSchema, resetOnboarding } from './onboarding'
+import {
+  ensureBundledRelayDefaults,
+  ensureOnboardingSchema,
+  resetOnboarding,
+} from './onboarding'
+import { getProviderKey } from './provider-keys'
 import { registerAuthDeepLink } from './auth'
 import {
   capture as telemetryCapture,
@@ -61,6 +69,16 @@ app.whenReady().then(async () => {
   }
 
   ensureOnboardingSchema()
+  ensureBundledRelayDefaults()
+  // Re-apply the saved Gemini key to the openclaw config on every launch so
+  // a stale or missing entry on disk recovers itself without forcing the
+  // user back through the wizard. No-op when nothing changed.
+  try {
+    const geminiKey = getProviderKey('gemini')
+    if (geminiKey) applyGeminiKeyToOpenClawConfig(geminiKey)
+  } catch (err) {
+    console.warn('[openclaw] failed to re-apply gemini key on launch', err)
+  }
   // Dev escape hatch: VOICECLAW_RESET_ONBOARDING=1 yarn dev wipes the
   // wizard cursor before window creation so the wizard reappears at
   // step 1. Saved keys/devices stay intact.

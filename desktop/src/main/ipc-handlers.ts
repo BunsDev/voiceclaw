@@ -3,10 +3,12 @@ import { getDb } from './db'
 import { isLaunchAtLoginEnabled, setLaunchAtLogin } from './login-items'
 import { serviceManager } from './services/service-manager'
 import { buildRelayEnv } from './services/relay-server'
+import { applyGeminiKeyToOpenClawConfig } from './services/openclaw-gateway'
 import { getAllocatedPorts } from './ports'
 import {
   type OnboardingPayload,
   type WizardStepId,
+  ensureBundledRelayDefaults,
   getOnboardingState,
   markOnboardingComplete,
   resetOnboarding,
@@ -40,6 +42,24 @@ export function registerIpcHandlers() {
   })
   ipcMain.handle('app:getServiceStatuses', () => serviceManager.getAllStatuses())
   ipcMain.handle('app:getServicePorts', () => getAllocatedPorts())
+  ipcMain.handle('app:resetBundledDefaults', async () => {
+    const defaults = ensureBundledRelayDefaults({ force: true })
+    const geminiKey = getProviderKey('gemini')
+    if (geminiKey) {
+      try {
+        applyGeminiKeyToOpenClawConfig(geminiKey)
+      } catch (err) {
+        console.warn('[bundled-defaults] failed to re-apply gemini key', err)
+      }
+    }
+    serviceManager.restart('relay', () => buildRelayEnv()).catch((err) => {
+      console.warn('[bundled-defaults] relay restart failed', err)
+    })
+    serviceManager.restart('openclawGateway').catch((err) => {
+      console.warn('[bundled-defaults] openclaw restart failed', err)
+    })
+    return { ok: true as const, relayApiKey: defaults.relayApiKey }
+  })
 
   // Telemetry. The renderer initializes its own posthog-js client but
   // shares the same distinct_id so a session ties events from main and
@@ -272,6 +292,18 @@ export function registerIpcHandlers() {
         serviceManager.restart('relay', () => buildRelayEnv()).catch((err) => {
           console.warn('[relay] restart after provider key save failed', err)
         })
+        if (provider === 'gemini') {
+          try {
+            const changed = applyGeminiKeyToOpenClawConfig(key)
+            if (changed) {
+              serviceManager.restart('openclawGateway').catch((err) => {
+                console.warn('[openclaw] restart after gemini key save failed', err)
+              })
+            }
+          } catch (err) {
+            console.warn('[openclaw] failed to apply gemini key to config', err)
+          }
+        }
       }
       return { ok: true as const }
     },

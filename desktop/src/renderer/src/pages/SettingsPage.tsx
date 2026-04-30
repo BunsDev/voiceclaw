@@ -45,9 +45,11 @@ export function SettingsPage() {
   const [serverUrl, setServerUrl] = useState('')
   const [serverUrlPlaceholder, setServerUrlPlaceholder] = useState('ws://localhost:8080/ws')
   const [apiKey, setApiKey] = useState('')
+  const [apiKeyPlaceholder, setApiKeyPlaceholder] = useState('Enter your API key')
   const [showApiKey, setShowApiKey] = useState(false)
   const [testStatus, setTestStatus] = useState<'idle' | 'testing' | 'ok' | 'error'>('idle')
   const [testError, setTestError] = useState('')
+  const [resetting, setResetting] = useState(false)
 
   // Web Search (Tavily) — when enabled AND a key is set, the realtime model
   // gets a fast web_search tool alongside ask_brain. Stored as plain settings
@@ -95,7 +97,10 @@ export function SettingsPage() {
         // Keep the static fallback placeholder.
       }
       const key = await getSetting('realtime_api_key')
-      if (key) setApiKey(key)
+      if (key) {
+        setApiKey(key)
+        setApiKeyPlaceholder(maskKey(key))
+      }
       const tk = await getSetting('tavily_api_key')
       if (tk) setTavilyKey(tk)
       // Default to enabled. Only treat the explicit string 'false' as off so
@@ -235,6 +240,26 @@ export function SettingsPage() {
     await setOptedOutRenderer(!v)
   }, [])
 
+  const resetBundled = useCallback(async () => {
+    setResetting(true)
+    try {
+      const result = await window.electronAPI?.app?.resetBundledDefaults?.()
+      if (result?.ok) {
+        setApiKey(result.relayApiKey)
+        setApiKeyPlaceholder(maskKey(result.relayApiKey))
+        setSetting('realtime_api_key', result.relayApiKey)
+        setServerUrl('')
+        setSetting('realtime_server_url', '')
+        setTestStatus('idle')
+        setTestError('')
+      }
+    } catch (err) {
+      console.warn('[SettingsPage] resetBundled failed', err)
+    } finally {
+      setResetting(false)
+    }
+  }, [])
+
   const testConnection = useCallback(async () => {
     setTestStatus('testing')
     setTestError('')
@@ -292,7 +317,7 @@ export function SettingsPage() {
                   type={showApiKey ? 'text' : 'password'}
                   value={apiKey}
                   onChange={(e) => updateApiKey(e.target.value)}
-                  placeholder="Enter your API key"
+                  placeholder={apiKeyPlaceholder}
                   className="pr-10"
                 />
                 <button
@@ -310,6 +335,15 @@ export function SettingsPage() {
             error={testError}
             onTest={testConnection}
           />
+
+          <div className="flex items-center justify-between text-xs">
+            <span className="text-muted-foreground">
+              Bundled relay running at <code className="rounded bg-muted px-1 py-0.5">{serverUrlPlaceholder}</code>
+            </span>
+            <Button variant="ghost" size="sm" onClick={resetBundled} disabled={resetting}>
+              {resetting ? 'Resetting…' : 'Reset to bundled defaults'}
+            </Button>
+          </div>
         </Card>
 
         {/* Web Search */}
@@ -555,6 +589,11 @@ export function SettingsPage() {
       </div>
     </div>
   )
+}
+
+function maskKey(key: string): string {
+  if (key.length <= 8) return '••••••••'
+  return `${key.slice(0, 4)}…${key.slice(-4)}`
 }
 
 function isRealtimeModel(model: string | null): model is RealtimeModel {

@@ -42,6 +42,11 @@ const electronAPI = {
       >,
     getServicePorts: () =>
       ipcRenderer.invoke('app:getServicePorts') as Promise<Record<string, number>>,
+    resetBundledDefaults: () =>
+      ipcRenderer.invoke('app:resetBundledDefaults') as Promise<{
+        ok: true
+        relayApiKey: string
+      }>,
   },
   tray: {
     setCallActive: (active: boolean) =>

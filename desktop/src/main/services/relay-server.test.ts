@@ -4,6 +4,7 @@ const isPackagedRef = { value: false }
 const existsRef = { fn: (_p: string) => false as boolean }
 const tokenRef = { value: null as string | null }
 const providerKeysRef = { fn: (_p: 'gemini' | 'openai' | 'xai') => null as string | null }
+const bundledRelayKeyRef = { value: null as string | null }
 let originalResourcesPath: string | undefined
 
 vi.mock('electron', () => ({
@@ -20,6 +21,10 @@ vi.mock('fs', () => ({
 
 vi.mock('../provider-keys', () => ({
   getProviderKey: (provider: 'gemini' | 'openai' | 'xai') => providerKeysRef.fn(provider),
+}))
+
+vi.mock('../onboarding', () => ({
+  getBundledRelayApiKey: () => bundledRelayKeyRef.value,
 }))
 
 vi.mock('./openclaw-gateway', () => ({
@@ -104,6 +109,7 @@ describe('buildRelayEnv', () => {
     delete process.env.TAVILY_API_KEY
     tokenRef.value = null
     providerKeysRef.fn = () => null
+    bundledRelayKeyRef.value = null
   })
 
   afterEach(() => {
@@ -141,5 +147,20 @@ describe('buildRelayEnv', () => {
     const { buildRelayEnv } = await import('./relay-server')
     const env = buildRelayEnv()
     expect(env.BRAIN_GATEWAY_AUTH_TOKEN).toBe('env-token')
+  })
+
+  it('injects RELAY_API_KEY from the bundled-defaults store when env is empty', async () => {
+    bundledRelayKeyRef.value = 'shared-secret-uuid'
+    const { buildRelayEnv } = await import('./relay-server')
+    const env = buildRelayEnv()
+    expect(env.RELAY_API_KEY).toBe('shared-secret-uuid')
+  })
+
+  it('does not override an explicit RELAY_API_KEY env value', async () => {
+    process.env.RELAY_API_KEY = 'env-relay-key'
+    bundledRelayKeyRef.value = 'bundled-uuid'
+    const { buildRelayEnv } = await import('./relay-server')
+    const env = buildRelayEnv()
+    expect(env.RELAY_API_KEY).toBe('env-relay-key')
   })
 })
