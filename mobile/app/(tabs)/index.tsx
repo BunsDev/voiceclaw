@@ -1,4 +1,5 @@
 import { LatencyBadge } from '@/components/latency-badge'
+import { ToolCallRow, type ToolCallItem } from '@/components/tool-call-row'
 import { VoiceClawMark } from '@/components/brand/voiceclaw-mark'
 import { Button } from '@/components/ui/button'
 import { Icon } from '@/components/ui/icon'
@@ -82,6 +83,9 @@ const DISPLAY_TEXT_FUNCTION = {
 
 type ContentPart = { type: 'text', text: string } | { type: 'image', url: string, alt: string }
 type PipelineDebugPhase = 'idle' | 'listening' | 'thinking' | 'speaking'
+type DisplayItem =
+  | { kind: 'message', message: Message }
+  | { kind: 'tool_call', item: ToolCallItem }
 
 const INITIAL_PIPELINE_DEBUG_STATE = {
   phase: 'idle' as PipelineDebugPhase,
@@ -105,6 +109,7 @@ export default function ChatScreen() {
   const { colorScheme } = useColorScheme()
   const palette = colorScheme === 'dark' ? BRAND.colors.dark : BRAND.colors.light
   const [messages, setMessages] = useState<Message[]>([])
+  const [toolCalls, setToolCalls] = useState<Map<string, ToolCallItem>>(new Map())
   const [inputText, setInputText] = useState('')
   const [isCallActive, setIsCallActive] = useState(false)
   const [isMuted, setIsMuted] = useState(false)
@@ -116,7 +121,7 @@ export default function ChatScreen() {
   const [debugMode, setDebugMode] = useState(false)
   const [streamingRole, setStreamingRole] = useState<'user' | 'assistant'>('assistant')
   const [isUserSpeaking, setIsUserSpeaking] = useState(false)
-  const flatListRef = useRef<FlatList<Message>>(null)
+  const flatListRef = useRef<FlatList<DisplayItem>>(null)
   const hasScrolledRef = useRef(false)
   const { playJoin, playEnd, startThinking, stopThinking } = useCallSounds()
   const soundsRef = useRef({ playJoin, playEnd, startThinking, stopThinking })
@@ -289,8 +294,32 @@ export default function ChatScreen() {
       setIsConnecting(false)
       cancelReconnectRef.current?.()
       soundsRef.current.playJoin()
-      // Start mic capture after session is ready
       ExpoRealtimeAudioModule.startCapture()
+    },
+    onToolCall: (callId, name, args) => {
+      setToolCalls((prev) => {
+        const next = new Map(prev)
+        next.set(callId, { callId, name, args, status: 'in-progress', startedAt: Date.now() })
+        return next
+      })
+    },
+    onToolCompleted: (callId, name, durationMs, result) => {
+      setToolCalls((prev) => {
+        const existing = prev.get(callId)
+        if (!existing) return prev
+        const next = new Map(prev)
+        next.set(callId, { ...existing, status: 'success', durationMs, result })
+        return next
+      })
+    },
+    onToolFailed: (callId, name, durationMs, error, cancelled) => {
+      setToolCalls((prev) => {
+        const existing = prev.get(callId)
+        if (!existing) return prev
+        const next = new Map(prev)
+        next.set(callId, { ...existing, status: cancelled ? 'cancelled' : 'error', durationMs, error })
+        return next
+      })
     },
     onTranscriptDelta: (text, role) => {
       if (role === 'user') setIsUserSpeaking(false)
@@ -589,6 +618,7 @@ export default function ChatScreen() {
     const conv = await createConversation()
     setConversationId(conv.id)
     setMessages([])
+    setToolCalls(new Map())
     setStreamingText(null)
     setIsThinking(false)
   }, [])
@@ -597,6 +627,7 @@ export default function ChatScreen() {
     hasScrolledRef.current = false
     setConversationId(id)
     setMessages(await getMessages(id))
+    setToolCalls(new Map())
     setStreamingText(null)
     setIsThinking(false)
   }, [])
@@ -861,14 +892,16 @@ export default function ChatScreen() {
     setIsMuted(newMuted)
   }, [isMuted, realtime])
 
-  let displayMessages = messages as Message[]
+  let baseMessages = messages as Message[]
   if (streamingText !== null) {
-    displayMessages = [...messages, { id: -1, conversation_id: conversationId ?? 0, role: streamingRole, content: streamingText, created_at: Date.now(), stt_latency_ms: null, llm_latency_ms: null, tts_latency_ms: null, stt_provider: null, llm_provider: null, tts_provider: null }]
+    baseMessages = [...messages, { id: -1, conversation_id: conversationId ?? 0, role: streamingRole, content: streamingText, created_at: Date.now(), stt_latency_ms: null, llm_latency_ms: null, tts_latency_ms: null, stt_provider: null, llm_provider: null, tts_provider: null }]
   } else if (isUserSpeaking) {
-    displayMessages = [...messages, { id: LISTENING_MESSAGE_ID, conversation_id: conversationId ?? 0, role: 'user' as const, content: '', created_at: Date.now(), stt_latency_ms: null, llm_latency_ms: null, tts_latency_ms: null, stt_provider: null, llm_provider: null, tts_provider: null }]
+    baseMessages = [...messages, { id: LISTENING_MESSAGE_ID, conversation_id: conversationId ?? 0, role: 'user' as const, content: '', created_at: Date.now(), stt_latency_ms: null, llm_latency_ms: null, tts_latency_ms: null, stt_provider: null, llm_provider: null, tts_provider: null }]
   } else if (isThinking) {
-    displayMessages = [...messages, { id: THINKING_MESSAGE_ID, conversation_id: conversationId ?? 0, role: 'assistant' as const, content: '', created_at: Date.now(), stt_latency_ms: null, llm_latency_ms: null, tts_latency_ms: null, stt_provider: null, llm_provider: null, tts_provider: null }]
+    baseMessages = [...messages, { id: THINKING_MESSAGE_ID, conversation_id: conversationId ?? 0, role: 'assistant' as const, content: '', created_at: Date.now(), stt_latency_ms: null, llm_latency_ms: null, tts_latency_ms: null, stt_provider: null, llm_provider: null, tts_provider: null }]
   }
+
+  const displayItems = buildDisplayItems(baseMessages, toolCalls)
 
   const { partials } = transcriptBuffer
 
@@ -893,14 +926,19 @@ export default function ChatScreen() {
       <FlatList
         testID="messages-list"
         ref={flatListRef}
-        data={displayMessages}
-        keyExtractor={(item) => item.id.toString()}
-        renderItem={({ item }) => (
-          <>
-            <MessageBubble message={item} />
-            {showLatency && item.id !== THINKING_MESSAGE_ID && item.id !== LISTENING_MESSAGE_ID && <LatencyBadge message={item} />}
-          </>
-        )}
+        data={displayItems}
+        keyExtractor={(item) => item.kind === 'tool_call' ? `tc:${item.item.callId}` : `msg:${item.message.id}`}
+        renderItem={({ item }) => {
+          if (item.kind === 'tool_call') {
+            return <ToolCallRow item={item.item} />
+          }
+          return (
+            <>
+              <MessageBubble message={item.message} />
+              {showLatency && item.message.id !== THINKING_MESSAGE_ID && item.message.id !== LISTENING_MESSAGE_ID && <LatencyBadge message={item.message} />}
+            </>
+          )
+        }}
         contentContainerStyle={{ paddingTop: 16, paddingBottom: 8 }}
         onContentSizeChange={() => {
           const animated = hasScrolledRef.current
@@ -1119,6 +1157,19 @@ export default function ChatScreen() {
 }
 
 // --- Helper Components ---
+
+function buildDisplayItems(messages: Message[], toolCalls: Map<string, ToolCallItem>): DisplayItem[] {
+  const items: DisplayItem[] = messages.map((m) => ({ kind: 'message' as const, message: m }))
+  for (const tc of toolCalls.values()) {
+    items.push({ kind: 'tool_call' as const, item: tc })
+  }
+  items.sort((a, b) => {
+    const aTime = a.kind === 'message' ? a.message.created_at : a.item.startedAt
+    const bTime = b.kind === 'message' ? b.message.created_at : b.item.startedAt
+    return aTime - bTime
+  })
+  return items
+}
 
 function PartialBubble({ role, text }: { role: 'user' | 'assistant', text: string }) {
   const isUser = role === 'user'

@@ -38,6 +38,8 @@ export interface RealtimeCallbacks {
   onTranscriptDelta?: (text: string, role: 'user' | 'assistant') => void
   onTranscriptDone?: (text: string, role: 'user' | 'assistant') => void
   onToolCall?: (callId: string, name: string, args: string) => void
+  onToolCompleted?: (callId: string, name: string, durationMs: number, result: string) => void
+  onToolFailed?: (callId: string, name: string, durationMs: number, error: string, cancelled: boolean) => void
   onToolProgress?: (callId: string, summary: string) => void
   onTurnStarted?: () => void
   onTurnEnded?: () => void
@@ -176,6 +178,14 @@ export function useRealtime(callbacks: RealtimeCallbacks): RealtimeControls {
 
       case 'tool.call':
         cb.onToolCall?.(data.callId, data.name, data.arguments)
+        break
+
+      case 'tool_call.completed':
+        cb.onToolCompleted?.(data.callId, data.name, data.durationMs, data.result)
+        break
+
+      case 'tool_call.failed':
+        cb.onToolFailed?.(data.callId, data.name, data.durationMs, data.error, data.cancelled)
         break
 
       case 'tool.progress':

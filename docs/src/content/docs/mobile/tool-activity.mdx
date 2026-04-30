@@ -1,0 +1,29 @@
+---
+title: Seeing what your agent is doing
+description: Tool activity rows in the VoiceClaw mobile chat
+---
+
+When you ask VoiceClaw something that requires looking things up — checking your calendar, searching the web, or querying your personal knowledge base — a small activity row appears in the chat while it works.
+
+## What you'll see
+
+Each tool call shows up as a compact row between your messages:
+
+- **Spinning indicator + elapsed time** — the agent is actively working on this step. The timer ticks live so you know it hasn't frozen.
+- **Checkmark + duration** — the step finished successfully. Tap to see what it found.
+- **Red X + error message** — something went wrong. The error details expand automatically so you can see why.
+- **Dash** — you interrupted the agent before this step completed. Nothing was lost; the agent moves on.
+
+## Tapping a row
+
+- **Success rows** are collapsed by default. Tap to expand the full result (useful for checking what data the agent is working from).
+- **Error rows** expand automatically so the reason is immediately visible.
+- Tap again to collapse.
+
+## Multiple steps
+
+Complex requests often involve several steps — a search, then a follow-up lookup, then a final answer. Each step appears as its own row in the order it ran, so you can see exactly what the agent did and how long each part took.
+
+## Performance
+
+Tool result payloads can be large (full calendar events, email threads, search results). The row only loads the full content when you tap to expand — scrolling through a long conversation with many tool calls stays smooth.

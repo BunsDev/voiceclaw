@@ -46,4 +46,4 @@ export const BRAND = {
   },
 } as const
 
-export type BrandPalette = typeof BRAND.colors.light
+export type BrandPalette = typeof BRAND.colors.light | typeof BRAND.colors.dark
