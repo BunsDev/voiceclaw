@@ -18,6 +18,7 @@ const MENU_MARGIN = 8
 
 export function MessageContextMenu({ x, y, items, onClose }: MessageContextMenuProps) {
   const ref = useRef<HTMLDivElement>(null)
+  const previousFocusRef = useRef<HTMLElement | null>(null)
   const [position, setPosition] = useState({ x, y })
 
   useLayoutEffect(() => {
@@ -35,12 +36,38 @@ export function MessageContextMenu({ x, y, items, onClose }: MessageContextMenuP
     setPosition({ x: nextX, y: nextY })
   }, [x, y])
 
+  useLayoutEffect(() => {
+    previousFocusRef.current = document.activeElement as HTMLElement | null
+    const first = ref.current?.querySelector<HTMLButtonElement>('[role="menuitem"]')
+    first?.focus()
+    return () => {
+      previousFocusRef.current?.focus?.()
+    }
+  }, [])
+
   useEffect(() => {
     const onPointerDown = (e: PointerEvent) => {
       if (ref.current && !ref.current.contains(e.target as Node)) onClose()
     }
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose()
+      if (e.key === 'Escape') {
+        onClose()
+        return
+      }
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp' || e.key === 'Home' || e.key === 'End') {
+        const buttons = Array.from(
+          ref.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]') ?? [],
+        )
+        if (buttons.length === 0) return
+        e.preventDefault()
+        const current = document.activeElement as HTMLElement | null
+        const idx = current ? buttons.indexOf(current as HTMLButtonElement) : -1
+        let next = 0
+        if (e.key === 'ArrowDown') next = idx < 0 ? 0 : (idx + 1) % buttons.length
+        else if (e.key === 'ArrowUp') next = idx <= 0 ? buttons.length - 1 : idx - 1
+        else if (e.key === 'End') next = buttons.length - 1
+        buttons[next].focus()
+      }
     }
     const onScroll = () => onClose()
     window.addEventListener('pointerdown', onPointerDown, true)
@@ -66,12 +93,13 @@ export function MessageContextMenu({ x, y, items, onClose }: MessageContextMenuP
         <button
           key={i}
           role="menuitem"
+          tabIndex={-1}
           onClick={() => {
             item.onSelect()
             onClose()
           }}
           className={
-            'w-full flex items-center gap-2 text-left px-3 py-1.5 text-sm transition-colors ' +
+            'w-full flex items-center gap-2 text-left px-3 py-1.5 text-sm transition-colors focus:outline-none focus-visible:bg-accent focus-visible:text-accent-foreground ' +
             (item.destructive
               ? 'text-destructive hover:bg-destructive/10'
               : 'text-foreground hover:bg-accent hover:text-accent-foreground')

@@ -87,6 +87,7 @@ export function ChatPage() {
   const closeMessageMenu = useCallback(() => setMessageMenu(null), [])
 
   const handleDeleteMessage = useCallback(async (message: Message) => {
+    setMessageMenu(null)
     const ok = window.confirm(
       'Delete this message? This removes it from the conversation history and cannot be undone.',
     )
