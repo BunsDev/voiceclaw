@@ -644,6 +644,20 @@ export function SettingsPage() {
               Restart
             </Button>
           </div>
+
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm text-foreground">Reveal Logs in Finder</p>
+              <p className="text-xs text-muted-foreground">Opens ~/Library/Logs/VoiceClaw/ in Finder. Useful when troubleshooting.</p>
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => { window.electronAPI.logs.reveal() }}
+            >
+              Reveal
+            </Button>
+          </div>
         </Card>
 
         {/* Privacy */}

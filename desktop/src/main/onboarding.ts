@@ -1,5 +1,6 @@
 import { randomUUID } from 'crypto'
 import { getDb } from './db'
+import { capture as telemetryCapture } from './telemetry'
 
 // Onboarding state — single-row table (id=1) capturing the wizard's
 // resume point and accumulated payload. Renderer reads on mount; if
@@ -110,6 +111,7 @@ export function markOnboardingComplete(): OnboardingState {
   const completedAt = new Date().toISOString()
   const db = getDb()
   db.prepare('UPDATE onboarding_state SET completed_at = ? WHERE id = 1').run(completedAt)
+  telemetryCapture('onboarding_completed')
   return { ...getOnboardingState(), completedAt }
 }
 

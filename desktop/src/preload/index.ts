@@ -188,6 +188,9 @@ const electronAPI = {
         }>
       >,
   },
+  logs: {
+    reveal: () => ipcRenderer.invoke('logs:reveal') as Promise<{ ok: boolean, path: string }>,
+  },
   net: {
     healthCheck: (url: string) => ipcRenderer.invoke('net:healthCheck', url) as Promise<{ ok: boolean, error?: string }>,
   },

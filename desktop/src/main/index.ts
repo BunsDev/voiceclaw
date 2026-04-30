@@ -42,6 +42,7 @@ import {
   capture as telemetryCapture,
   captureException,
   flush as flushTelemetry,
+  getDistinctId,
   identify as telemetryIdentify,
   registerProcessHandlers as registerTelemetryHandlers,
   shutdown as shutdownTelemetry,
@@ -90,8 +91,9 @@ app.whenReady().then(async () => {
   registerIpcHandlers()
   registerScreenCaptureHandlers()
   registerTelemetryHandlers()
+  const firstLaunch = isFirstLaunch()
   telemetryIdentify()
-  telemetryCapture('app_launched', { dev: isDev })
+  telemetryCapture('app_launched', { dev: isDev, first_launch: firstLaunch })
 
   const wasOpenedAsHidden = app.getLoginItemSettings().wasOpenedAsHidden
 
@@ -284,6 +286,20 @@ function isCallBarEnabled(): boolean {
     return row?.value !== 'false'
   } catch {
     return true
+  }
+}
+
+function isFirstLaunch(): boolean {
+  try {
+    const db = getDb()
+    const row = db
+      .prepare('SELECT value FROM settings WHERE key = ?')
+      .get('telemetry_distinct_id') as { value: string } | undefined
+    const isNew = !row?.value
+    getDistinctId()
+    return isNew
+  } catch {
+    return false
   }
 }
 

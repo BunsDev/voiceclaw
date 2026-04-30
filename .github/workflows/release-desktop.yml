@@ -139,6 +139,11 @@ jobs:
           # binary can't shell out to git.
           GIT_SHA: ${{ steps.meta.outputs.git_sha }}
           RELAY_VERSION: ${{ steps.meta.outputs.relay_version }}
+          # PostHog telemetry tokens. VITE_* is picked up by the renderer
+          # bundle; NEXT_PUBLIC_* is accepted by the main-process posthog-node
+          # wrapper. Both must be set for full coverage.
+          VITE_POSTHOG_PROJECT_TOKEN: ${{ secrets.VITE_POSTHOG_PROJECT_TOKEN }}
+          NEXT_PUBLIC_POSTHOG_PROJECT_TOKEN: ${{ secrets.VITE_POSTHOG_PROJECT_TOKEN }}
         run: yarn dist:mac --publish never -c.forceCodeSigning=true
 
       # Launch the freshly-signed-and-notarized .app against an isolated

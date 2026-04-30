@@ -1,0 +1,20 @@
+---
+title: Troubleshooting VoiceClaw
+description: What to do when something isn't working — how to find log files, reset settings, and get help.
+---
+
+If something isn't working as expected, the first step is to check the log files VoiceClaw writes on your Mac.
+
+## Reveal log files in Finder
+
+Open **Settings → Debug → Reveal Logs in Finder**. This opens the `~/Library/Logs/VoiceClaw/` folder directly in Finder.
+
+Attach the most recent `.log` file when reporting a bug or asking for help — it contains the information needed to diagnose most issues.
+
+## Common problems
+
+**The assistant isn't responding.** Check that your Gemini API key is saved correctly in Settings → Provider. If the key is valid but calls still fail, restart VoiceClaw.
+
+**Microphone isn't working.** Open Settings → Permissions and confirm microphone access is granted. If it shows "Denied", click the link to open System Settings and re-enable it.
+
+**The relay won't connect.** Check the relay URL in Settings. If you're using the built-in relay (default), try Settings → Debug → Re-run onboarding wizard to reset the relay configuration.

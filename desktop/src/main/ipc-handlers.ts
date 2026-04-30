@@ -1,4 +1,4 @@
-import { dialog, ipcMain, net, shell, systemPreferences } from 'electron'
+import { app, dialog, ipcMain, net, shell, systemPreferences } from 'electron'
 import { getDb } from './db'
 import { isLaunchAtLoginEnabled, setLaunchAtLogin } from './login-items'
 import { serviceManager } from './services/service-manager'
@@ -346,6 +346,13 @@ export function registerIpcHandlers() {
       return speakGreetingPreview({ apiKey, voice: params.voice, text: params.text })
     },
   )
+
+  // Logs
+  ipcMain.handle('logs:reveal', async () => {
+    const dir = app.getPath('logs')
+    await shell.openPath(dir)
+    return { ok: true, path: dir }
+  })
 
   // Network: test relay server connection from main process (avoids CORS)
   ipcMain.handle('net:healthCheck', async (_e, url: string) => {
