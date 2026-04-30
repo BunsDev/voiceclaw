@@ -64,6 +64,7 @@ declare global {
           providers?: ProviderInfo,
         ) => Promise<Message>
         getMessages: (conversationId: number) => Promise<Message[]>
+        deleteMessage: (id: number) => Promise<{ ok: true } | { ok: false; error: string }>
         getSetting: (key: string) => Promise<string | null>
         setSetting: (key: string, value: string) => Promise<void>
         getAllSettings: () => Promise<Record<string, string>>
@@ -124,6 +125,12 @@ export async function addMessage(
 
 export async function getMessages(conversationId: number): Promise<Message[]> {
   return api().getMessages(conversationId)
+}
+
+export async function deleteMessage(
+  id: number,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  return api().deleteMessage(id)
 }
 
 export async function getSetting(key: string): Promise<string | null> {

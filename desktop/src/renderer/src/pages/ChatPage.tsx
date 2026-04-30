@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { Mic, MicOff, PhoneOff, Plus, Phone, Monitor, MonitorOff } from 'lucide-react'
+import { useCallback, useEffect, useRef, useState, type MouseEvent } from 'react'
+import { Copy, Mic, MicOff, PhoneOff, Plus, Phone, Monitor, MonitorOff, Trash2 } from 'lucide-react'
 import { Button } from '../components/ui/Button'
 import { MessageBubble } from '../components/MessageBubble'
+import { MessageContextMenu, type MessageContextMenuItem } from '../components/MessageContextMenu'
 import { ThinkingDots } from '../components/ThinkingDots'
 import { AudioLevelMeter } from '../components/AudioLevelMeter'
 import { VoiceClawMark } from '../components/brand/VoiceClawMark'
@@ -22,6 +23,7 @@ import {
 import {
   addMessage,
   createConversation,
+  deleteMessage,
   getLatestConversation,
   getMessages,
   getSetting,
@@ -63,6 +65,7 @@ export function ChatPage() {
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const activeRelayUrlRef = useRef<string>('')
   const brainCallStartRef = useRef<Map<string, number>>(new Map())
+  const [messageMenu, setMessageMenu] = useState<{ x: number; y: number; message: Message } | null>(null)
   const { selectedConversationId, selectConversation } = useConversationContext()
 
   // Reload messages from DB — single source of truth, prevents duplicates.
@@ -72,6 +75,42 @@ export function ChatPage() {
     if (!convId) return
     const msgs = await getMessages(convId)
     setMessages(msgs)
+  }, [])
+
+  const handleMessageContextMenu = useCallback(
+    (event: MouseEvent<HTMLDivElement>, message: Message) => {
+      setMessageMenu({ x: event.clientX, y: event.clientY, message })
+    },
+    [],
+  )
+
+  const closeMessageMenu = useCallback(() => setMessageMenu(null), [])
+
+  const handleDeleteMessage = useCallback(async (message: Message) => {
+    setMessageMenu(null)
+    const ok = window.confirm(
+      'Delete this message? This removes it from the conversation history and cannot be undone.',
+    )
+    if (!ok) return
+    setMessages((prev) => prev.filter((m) => m.id !== message.id))
+    try {
+      const result = await deleteMessage(message.id)
+      if (!result.ok) {
+        console.warn('[ChatPage] Failed to delete message:', result.error)
+        await loadMessages()
+      }
+    } catch (err) {
+      console.warn('[ChatPage] Failed to delete message:', err)
+      await loadMessages()
+    }
+  }, [loadMessages])
+
+  const handleCopyMessage = useCallback(async (message: Message) => {
+    try {
+      await navigator.clipboard.writeText(message.content)
+    } catch (err) {
+      console.warn('[ChatPage] Failed to copy message:', err)
+    }
   }, [])
 
   // Auto-scroll to bottom on new messages
@@ -471,7 +510,12 @@ export function ChatPage() {
         )}
         {buildTimeline(messages, toolCalls).map((item) =>
           item.kind === 'message' ? (
-            <MessageBubble key={`msg-${item.data.id}`} message={item.data} showLatency={showLatency} />
+            <MessageBubble
+              key={`msg-${item.data.id}`}
+              message={item.data}
+              showLatency={showLatency}
+              onContextMenu={handleMessageContextMenu}
+            />
           ) : (
             <ToolCallRow key={`tool-${item.data.callId}`} entry={item.data} />
           )
@@ -595,6 +639,15 @@ export function ChatPage() {
           onCancel={() => setShowScreenPicker(false)}
         />
       )}
+
+      {messageMenu && (
+        <MessageContextMenu
+          x={messageMenu.x}
+          y={messageMenu.y}
+          onClose={closeMessageMenu}
+          items={buildMessageMenuItems(messageMenu.message, handleCopyMessage, handleDeleteMessage)}
+        />
+      )}
     </div>
   )
 }
@@ -606,6 +659,26 @@ export function ChatPage() {
 type TimelineItem =
   | { kind: 'message'; ts: number; data: Message }
   | { kind: 'tool'; ts: number; data: ToolCallEntry }
+
+function buildMessageMenuItems(
+  message: Message,
+  onCopy: (m: Message) => void,
+  onDelete: (m: Message) => void,
+): MessageContextMenuItem[] {
+  return [
+    {
+      label: 'Copy',
+      icon: <Copy size={14} />,
+      onSelect: () => onCopy(message),
+    },
+    {
+      label: 'Delete message',
+      icon: <Trash2 size={14} />,
+      destructive: true,
+      onSelect: () => onDelete(message),
+    },
+  ]
+}
 
 function buildTimeline(messages: Message[], toolCalls: ToolCallEntry[]): TimelineItem[] {
   const items: TimelineItem[] = [

@@ -1,0 +1,40 @@
+---
+title: Chat actions — right-click menu
+description: How to delete or copy individual messages from a VoiceClaw desktop conversation, and what gets removed when you do.
+---
+
+import { Aside } from '@astrojs/starlight/components'
+
+Sometimes a conversation picks up a stray message — a misheard transcript, a tool call that fired by accident, an exchange you'd rather not keep. VoiceClaw desktop lets you remove individual messages from a conversation with a right-click.
+
+## Open the menu
+
+Right-click any message bubble in the chat. A small menu appears next to your cursor with two actions:
+
+- **Copy** — copies the message text to your clipboard.
+- **Delete** — permanently removes the message from this conversation.
+
+The menu opens with the first item already focused. Use the arrow keys to move between items, **Enter** to choose, **Escape** to dismiss without picking anything.
+
+## What "delete" actually does
+
+Choosing **Delete** prompts you to confirm, then removes the message from your local conversation database. The chat updates immediately. There's no undo.
+
+<Aside type="caution">
+Delete is local and permanent. The deleted message:
+
+- disappears from the chat UI
+- is removed from the underlying SQLite database
+- will not reappear if you restart the app
+
+It does **not** roll back any side effects the message produced — for example, if you delete an assistant message that called a tool, the tool's effect on your system (an email sent, a file written) is unaffected.
+</Aside>
+
+## What you can't delete from this menu
+
+The right-click menu only operates on stored conversation messages. A few transient things in the chat are not eligible:
+
+- **The live streaming preview.** The bubble that fills in while the AI is mid-reply isn't a stored message yet, so it has no menu. Wait until the reply finishes.
+- **Tool-call rows.** The inline tool-call indicators rendered alongside messages aren't standalone rows in the message store, so they don't get their own menu. They're tied to the assistant message that invoked them and disappear with it.
+
+If you need to clear a whole conversation, use **Delete conversation** from the conversation list instead — that removes every message at once.
