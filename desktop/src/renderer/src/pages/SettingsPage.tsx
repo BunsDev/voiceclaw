@@ -5,7 +5,7 @@ import { Card } from '../components/ui/Card'
 import { Input } from '../components/ui/Input'
 import { Select } from '../components/ui/Select'
 import { Toggle } from '../components/ui/Toggle'
-import { identityApi } from '../lib/onboarding-api'
+import { identityApi, onboarding } from '../lib/onboarding-api'
 import { useTheme, type Theme } from '../lib/use-theme'
 import { enumerateAudioDevices, type AudioDevice } from '../lib/audio-engine'
 import { getSetting, setSetting } from '../lib/db'
@@ -626,6 +626,23 @@ export function SettingsPage() {
               <p className="text-xs text-muted-foreground">Post per-turn latency to Langfuse via relay</p>
             </div>
             <Toggle checked={tracingEnabled} onChange={toggleTracing} />
+          </div>
+
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm text-foreground">Re-run onboarding wizard</p>
+              <p className="text-xs text-muted-foreground">Resets the wizard cursor so you can step through it again. API keys and sign-in stay.</p>
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={async () => {
+                const result = await onboarding.reset()
+                if (result.ok) window.location.reload()
+              }}
+            >
+              Restart
+            </Button>
           </div>
         </Card>
 
