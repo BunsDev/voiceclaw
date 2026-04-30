@@ -28,6 +28,42 @@ export type Message = {
   tts_provider: string | null
 }
 
+export type AttachmentKind = 'image'
+export type AttachmentStorage = 'inline' | 'file'
+
+export type AttachmentInput = {
+  kind: AttachmentKind
+  mime: string
+  base64: string
+  byteSize: number
+  width?: number | null
+  height?: number | null
+  originalName?: string | null
+}
+
+export type Attachment = {
+  id: number
+  message_id: number
+  kind: AttachmentKind
+  mime: string
+  storage: AttachmentStorage
+  data: string | null
+  path: string | null
+  width: number | null
+  height: number | null
+  byte_size: number
+  original_name: string | null
+  created_at: number
+}
+
+export type PickImageResult =
+  | {
+      ok: true
+      file: { base64: string; byteSize: number; mime: string; originalName: string | null }
+    }
+  | { ok: false; cancelled: true }
+  | { ok: false; error: string }
+
 export type LatencyData = {
   sttLatencyMs?: number
   llmLatencyMs?: number
@@ -65,6 +101,14 @@ declare global {
         ) => Promise<Message>
         getMessages: (conversationId: number) => Promise<Message[]>
         deleteMessage: (id: number) => Promise<{ ok: true } | { ok: false; error: string }>
+        attachToMessage: (
+          messageId: number,
+          input: AttachmentInput,
+        ) => Promise<
+          { ok: true; attachment: Attachment } | { ok: false; error: string }
+        >
+        getAttachmentsForMessage: (messageId: number) => Promise<Attachment[]>
+        getAttachmentsForConversation: (conversationId: number) => Promise<Attachment[]>
         getSetting: (key: string) => Promise<string | null>
         setSetting: (key: string, value: string) => Promise<void>
         getAllSettings: () => Promise<Record<string, string>>
@@ -74,6 +118,9 @@ declare global {
       }
       net: {
         healthCheck: (url: string) => Promise<{ ok: boolean, error?: string }>
+      }
+      attachments?: {
+        pickImage: () => Promise<PickImageResult>
       }
     }
   }
@@ -131,6 +178,39 @@ export async function deleteMessage(
   id: number,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   return api().deleteMessage(id)
+}
+
+export async function attachToMessage(
+  messageId: number,
+  input: AttachmentInput,
+): Promise<{ ok: true; attachment: Attachment } | { ok: false; error: string }> {
+  return api().attachToMessage(messageId, input)
+}
+
+export async function getAttachmentsForMessage(messageId: number): Promise<Attachment[]> {
+  return api().getAttachmentsForMessage(messageId)
+}
+
+export async function getAttachmentsForConversation(
+  conversationId: number,
+): Promise<Attachment[]> {
+  return api().getAttachmentsForConversation(conversationId)
+}
+
+export async function pickImageAttachment(): Promise<PickImageResult> {
+  const api = window.electronAPI.attachments
+  if (!api) return { ok: false, error: 'Attachment picker unavailable' }
+  return api.pickImage()
+}
+
+export function attachmentDataUrl(attachment: Attachment): string | null {
+  if (attachment.storage === 'inline' && attachment.data) {
+    return `data:${attachment.mime};base64,${attachment.data}`
+  }
+  if (attachment.storage === 'file' && attachment.path) {
+    return `file://${attachment.path}`
+  }
+  return null
 }
 
 export async function getSetting(key: string): Promise<string | null> {

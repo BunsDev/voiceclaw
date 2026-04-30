@@ -32,6 +32,36 @@ type OnboardingState = {
 
 type AuthCallback = { ok: true; user: { id?: string; email?: string | null; name?: string | null } | null } | { ok: false; error: string }
 
+type AttachmentInputBridge = {
+  kind: 'image'
+  mime: string
+  base64: string
+  byteSize: number
+  width?: number | null
+  height?: number | null
+  originalName?: string | null
+}
+
+type AttachmentRecordBridge = {
+  id: number
+  message_id: number
+  kind: 'image'
+  mime: string
+  storage: 'inline' | 'file'
+  data: string | null
+  path: string | null
+  width: number | null
+  height: number | null
+  byte_size: number
+  original_name: string | null
+  created_at: number
+}
+
+type PickImageResult =
+  | { ok: true; file: { base64: string; byteSize: number; mime: string; originalName: string | null } }
+  | { ok: false; cancelled: true }
+  | { ok: false; error: string }
+
 const electronAPI = {
   platform: process.platform,
   app: {
@@ -112,6 +142,18 @@ const electronAPI = {
     deleteMessage: (id: number) =>
       ipcRenderer.invoke('db:deleteMessage', id) as Promise<
         { ok: true } | { ok: false; error: string }
+      >,
+    attachToMessage: (messageId: number, input: AttachmentInputBridge) =>
+      ipcRenderer.invoke('db:attachToMessage', messageId, input) as Promise<
+        { ok: true; attachment: AttachmentRecordBridge } | { ok: false; error: string }
+      >,
+    getAttachmentsForMessage: (messageId: number) =>
+      ipcRenderer.invoke('db:getAttachmentsForMessage', messageId) as Promise<
+        AttachmentRecordBridge[]
+      >,
+    getAttachmentsForConversation: (conversationId: number) =>
+      ipcRenderer.invoke('db:getAttachmentsForConversation', conversationId) as Promise<
+        AttachmentRecordBridge[]
       >,
     getSetting: (key: string) => ipcRenderer.invoke('db:getSetting', key),
     setSetting: (key: string, value: string) => ipcRenderer.invoke('db:setSetting', key, value),
@@ -215,6 +257,9 @@ const electronAPI = {
       ipcRenderer.invoke('diagnostics:export') as Promise<
         { ok: true; path: string } | { ok: false; error: string }
       >,
+  },
+  attachments: {
+    pickImage: () => ipcRenderer.invoke('attachments:pickImage') as Promise<PickImageResult>,
   },
 }
 

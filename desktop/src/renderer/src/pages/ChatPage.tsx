@@ -1,6 +1,27 @@
-import { useCallback, useEffect, useRef, useState, type MouseEvent } from 'react'
-import { Copy, Mic, MicOff, PhoneOff, Plus, Phone, Monitor, MonitorOff, Trash2 } from 'lucide-react'
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ClipboardEvent,
+  type DragEvent,
+  type MouseEvent,
+} from 'react'
+import {
+  Copy,
+  ImagePlus,
+  Mic,
+  MicOff,
+  Monitor,
+  MonitorOff,
+  Phone,
+  PhoneOff,
+  Plus,
+  Trash2,
+} from 'lucide-react'
 import { Button } from '../components/ui/Button'
+import { AttachmentTray } from '../components/AttachmentTray'
 import { MessageBubble } from '../components/MessageBubble'
 import { MessageContextMenu, type MessageContextMenuItem } from '../components/MessageContextMenu'
 import { ThinkingDots } from '../components/ThinkingDots'
@@ -22,15 +43,24 @@ import {
 } from '../lib/tool-call-store'
 import {
   addMessage,
+  attachToMessage,
   createConversation,
   deleteMessage,
+  getAttachmentsForConversation,
   getLatestConversation,
   getMessages,
   getSetting,
+  pickImageAttachment,
   setSetting,
   updateConversationTitle,
+  type Attachment,
   type Message,
 } from '../lib/db'
+import {
+  fileToPendingAttachment,
+  pendingToAttachmentInput,
+  type PendingAttachment,
+} from '../lib/attachments'
 import { getVoiceForProvider, providerForModel } from '../lib/voice-prefs'
 
 const DEFAULT_REALTIME_MODEL = 'gemini-3.1-flash-live-preview'
@@ -65,15 +95,35 @@ export function ChatPage() {
   const activeRelayUrlRef = useRef<string>('')
   const brainCallStartRef = useRef<Map<string, number>>(new Map())
   const [messageMenu, setMessageMenu] = useState<{ x: number; y: number; message: Message } | null>(null)
+  const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([])
+  const [attachments, setAttachments] = useState<Attachment[]>([])
+  const [attachmentError, setAttachmentError] = useState<string | null>(null)
+  const [isDraggingFile, setIsDraggingFile] = useState(false)
+  const [sendingAttachments, setSendingAttachments] = useState(false)
+  const dragDepthRef = useRef(0)
   const { selectedConversationId, selectConversation } = useConversationContext()
+
+  const attachmentsByMessage = useMemo(() => {
+    const map = new Map<number, Attachment[]>()
+    for (const a of attachments) {
+      const list = map.get(a.message_id) ?? []
+      list.push(a)
+      map.set(a.message_id, list)
+    }
+    return map
+  }, [attachments])
 
   // Reload messages from DB — single source of truth, prevents duplicates.
   // Uses conversationIdRef so callbacks always see the latest ID.
   const loadMessages = useCallback(async () => {
     const convId = conversationIdRef.current
     if (!convId) return
-    const msgs = await getMessages(convId)
+    const [msgs, atts] = await Promise.all([
+      getMessages(convId),
+      getAttachmentsForConversation(convId),
+    ])
     setMessages(msgs)
+    setAttachments(atts)
   }, [])
 
   const handleMessageContextMenu = useCallback(
@@ -146,8 +196,12 @@ export function ChatPage() {
     if (conv) {
       conversationIdRef.current = conv.id
       setConversationId(conv.id)
-      const msgs = await getMessages(conv.id)
+      const [msgs, atts] = await Promise.all([
+        getMessages(conv.id),
+        getAttachmentsForConversation(conv.id),
+      ])
       setMessages(msgs)
+      setAttachments(atts)
       titleGeneratedRef.current = msgs.length > 0
     }
   }
@@ -155,8 +209,12 @@ export function ChatPage() {
   const loadConversation = async (id: number) => {
     conversationIdRef.current = id
     setConversationId(id)
-    const msgs = await getMessages(id)
+    const [msgs, atts] = await Promise.all([
+      getMessages(id),
+      getAttachmentsForConversation(id),
+    ])
     setMessages(msgs)
+    setAttachments(atts)
     titleGeneratedRef.current = msgs.length > 0
   }
 
@@ -407,6 +465,9 @@ export function ChatPage() {
     conversationIdRef.current = null
     setConversationId(null)
     setMessages([])
+    setAttachments([])
+    setPendingAttachments([])
+    setAttachmentError(null)
     setToolCalls([])
     titleGeneratedRef.current = false
   }, [isCallActive, endCall])
@@ -450,6 +511,140 @@ export function ChatPage() {
       ? 'Screen sharing is only available with Gemini Live. Grok Voice does not support video input.'
       : 'Share screen'
 
+  const ingestFiles = useCallback(async (files: File[] | FileList) => {
+    const list = Array.from(files)
+    if (list.length === 0) return
+    const accepted: PendingAttachment[] = []
+    const errors: string[] = []
+    for (const file of list) {
+      const result = await fileToPendingAttachment(file)
+      if (result.ok) accepted.push(result.pending)
+      else errors.push(`${file.name || 'attachment'}: ${result.error}`)
+    }
+    if (accepted.length > 0) {
+      setPendingAttachments((prev) => [...prev, ...accepted])
+      setAttachmentError(null)
+    }
+    if (errors.length > 0) setAttachmentError(errors.join('  '))
+  }, [])
+
+  const handlePickImage = useCallback(async () => {
+    const result = await pickImageAttachment()
+    if (!result.ok) {
+      if ('cancelled' in result) return
+      setAttachmentError(result.error)
+      return
+    }
+    const file = result.file
+    const previewUrl = `data:${file.mime};base64,${file.base64}`
+    setPendingAttachments((prev) => [
+      ...prev,
+      {
+        id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+        base64: file.base64,
+        mime: file.mime,
+        byteSize: file.byteSize,
+        originalName: file.originalName,
+        previewUrl,
+      },
+    ])
+    setAttachmentError(null)
+  }, [])
+
+  const handleRemovePending = useCallback((id: string) => {
+    setPendingAttachments((prev) => prev.filter((p) => p.id !== id))
+  }, [])
+
+  const handleSendAttachments = useCallback(async () => {
+    if (pendingAttachments.length === 0) return
+    setSendingAttachments(true)
+    try {
+      const convId = await ensureConversation()
+      const placeholder = describePlaceholder(pendingAttachments)
+      const message = await addMessage(convId, 'user', placeholder)
+      const newAttachments: Attachment[] = []
+      const failures: string[] = []
+      for (const pending of pendingAttachments) {
+        const result = await attachToMessage(message.id, pendingToAttachmentInput(pending))
+        if (result.ok) {
+          newAttachments.push(result.attachment)
+          if (isCallActive) {
+            try {
+              realtime.sendFrame(pending.base64)
+            } catch (err) {
+              console.warn('[ChatPage] forwarding attachment to brain failed:', err)
+            }
+          }
+        } else {
+          failures.push(`${pending.originalName ?? 'attachment'}: ${result.error}`)
+        }
+      }
+      setMessages((prev) => [...prev, message])
+      setAttachments((prev) => [...prev, ...newAttachments])
+      setPendingAttachments([])
+      if (failures.length > 0) setAttachmentError(failures.join('  '))
+      else setAttachmentError(null)
+      if (!titleGeneratedRef.current) {
+        titleGeneratedRef.current = true
+        const title = generateTitle(placeholder)
+        updateConversationTitle(convId, title).catch((err) =>
+          console.warn('[ChatPage] Failed to update title:', err),
+        )
+      }
+    } finally {
+      setSendingAttachments(false)
+    }
+  }, [pendingAttachments, isCallActive, realtime])
+
+  const handleDragEnter = useCallback((e: DragEvent<HTMLDivElement>) => {
+    if (!hasFilePayload(e)) return
+    e.preventDefault()
+    dragDepthRef.current += 1
+    setIsDraggingFile(true)
+  }, [])
+
+  const handleDragLeave = useCallback((e: DragEvent<HTMLDivElement>) => {
+    if (!hasFilePayload(e)) return
+    e.preventDefault()
+    dragDepthRef.current = Math.max(0, dragDepthRef.current - 1)
+    if (dragDepthRef.current === 0) setIsDraggingFile(false)
+  }, [])
+
+  const handleDragOver = useCallback((e: DragEvent<HTMLDivElement>) => {
+    if (!hasFilePayload(e)) return
+    e.preventDefault()
+  }, [])
+
+  const handleDrop = useCallback(
+    (e: DragEvent<HTMLDivElement>) => {
+      if (!hasFilePayload(e)) return
+      e.preventDefault()
+      dragDepthRef.current = 0
+      setIsDraggingFile(false)
+      if (e.dataTransfer.files.length === 0) return
+      void ingestFiles(e.dataTransfer.files)
+    },
+    [ingestFiles],
+  )
+
+  const handlePaste = useCallback(
+    (e: ClipboardEvent<HTMLDivElement>) => {
+      const items = e.clipboardData?.items
+      if (!items) return
+      const files: File[] = []
+      for (const item of items) {
+        if (item.kind === 'file') {
+          const file = item.getAsFile()
+          if (file) files.push(file)
+        }
+      }
+      if (files.length === 0) return
+      e.preventDefault()
+      void ingestFiles(files)
+    },
+    [ingestFiles],
+  )
+
   // Keyboard shortcuts: Cmd+N (new), Cmd+M (mute), Cmd+E (end call)
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -480,7 +675,14 @@ export function ChatPage() {
   }, [isCallActive, newConversation, toggleMute, endCall])
 
   return (
-    <div className="flex-1 flex flex-col overflow-hidden">
+    <div
+      className="flex-1 flex flex-col overflow-hidden relative"
+      onDragEnter={handleDragEnter}
+      onDragLeave={handleDragLeave}
+      onDragOver={handleDragOver}
+      onDrop={handleDrop}
+      onPaste={handlePaste}
+    >
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-2 border-b border-border bg-background/65 backdrop-blur">
         <div className="text-sm text-muted-foreground">
@@ -488,10 +690,22 @@ export function ChatPage() {
             ? `${messages.length} messages`
             : 'Start a conversation'}
         </div>
-        <Button variant="ghost" size="sm" onClick={newConversation}>
-          <Plus size={16} className="mr-1" />
-          New
-        </Button>
+        <div className="flex items-center gap-1">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={handlePickImage}
+            title="Attach an image (PNG, JPG, WEBP, ≤10MB)"
+            aria-label="Attach an image"
+          >
+            <ImagePlus size={16} className="mr-1" />
+            Attach
+          </Button>
+          <Button variant="ghost" size="sm" onClick={newConversation}>
+            <Plus size={16} className="mr-1" />
+            New
+          </Button>
+        </div>
       </div>
 
       {/* Messages */}
@@ -512,6 +726,7 @@ export function ChatPage() {
             <MessageBubble
               key={`msg-${item.data.id}`}
               message={item.data}
+              attachments={attachmentsByMessage.get(item.data.id) ?? []}
               showLatency={showLatency}
               onContextMenu={handleMessageContextMenu}
             />
@@ -574,6 +789,29 @@ export function ChatPage() {
           {connectionError}
         </div>
       )}
+
+      {/* Attachment validation error */}
+      {attachmentError && (
+        <div className="mx-4 mt-2 px-3 py-2 rounded-md bg-destructive/10 text-destructive text-sm text-center flex items-start justify-between gap-2">
+          <span className="flex-1 text-left">{attachmentError}</span>
+          <button
+            type="button"
+            onClick={() => setAttachmentError(null)}
+            className="text-muted-foreground hover:text-destructive"
+            aria-label="Dismiss attachment error"
+          >
+            <Plus size={14} className="rotate-45" />
+          </button>
+        </div>
+      )}
+
+      {/* Pending attachments tray */}
+      <AttachmentTray
+        pending={pendingAttachments}
+        onRemove={handleRemovePending}
+        onSend={handleSendAttachments}
+        sending={sendingAttachments}
+      />
 
       {/* Call controls */}
       <div className="px-4 py-3 border-t border-border flex items-center justify-center gap-3">
@@ -647,6 +885,16 @@ export function ChatPage() {
           items={buildMessageMenuItems(messageMenu.message, handleCopyMessage, handleDeleteMessage)}
         />
       )}
+
+      {isDraggingFile && (
+        <div className="absolute inset-0 z-50 pointer-events-none flex items-center justify-center bg-background/80 backdrop-blur-sm border-2 border-dashed border-primary rounded-md">
+          <div className="text-center">
+            <ImagePlus size={36} className="mx-auto text-primary mb-3" />
+            <p className="text-base font-medium text-foreground">Drop image to attach</p>
+            <p className="text-xs text-muted-foreground mt-1">PNG · JPG · WEBP · up to 10MB</p>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -702,6 +950,21 @@ function normalizeRealtimeModel(model: string | null): typeof REALTIME_MODELS[nu
   return (REALTIME_MODELS as readonly string[]).includes(model ?? '')
     ? model as typeof REALTIME_MODELS[number]
     : DEFAULT_REALTIME_MODEL
+}
+
+function hasFilePayload(e: DragEvent<HTMLDivElement>): boolean {
+  const types = e.dataTransfer?.types
+  if (!types) return false
+  for (const t of types) if (t === 'Files') return true
+  return false
+}
+
+function describePlaceholder(pending: PendingAttachment[]): string {
+  if (pending.length === 1) {
+    const name = pending[0].originalName
+    return name ? `Attached: ${name}` : 'Attached an image.'
+  }
+  return `Attached ${pending.length} images.`
 }
 
 async function defaultRelayUrl(): Promise<string> {

@@ -1,4 +1,14 @@
 import { app, dialog, ipcMain, net, shell, systemPreferences } from 'electron'
+import { readFileSync, statSync } from 'fs'
+import { extname } from 'path'
+import {
+  type AttachmentInput,
+  type AttachmentRecord,
+  deleteAttachmentFile,
+  shouldStoreInline,
+  validateAttachmentInput,
+  writeAttachmentToDisk,
+} from './attachments'
 import { getDb } from './db'
 import { isLaunchAtLoginEnabled, setLaunchAtLogin } from './login-items'
 import { serviceManager } from './services/service-manager'
@@ -142,9 +152,17 @@ export function registerIpcHandlers() {
 
   ipcMain.handle('db:deleteConversation', (_e, id: number) => {
     const db = getDb()
+    const orphanedFiles = db
+      .prepare(
+        `SELECT a.path FROM message_attachments a
+          JOIN messages m ON m.id = a.message_id
+          WHERE m.conversation_id = ? AND a.storage = 'file' AND a.path IS NOT NULL`,
+      )
+      .all(id) as { path: string }[]
     db.prepare('DELETE FROM conversation_summaries WHERE conversation_id = ?').run(id)
     db.prepare('DELETE FROM messages WHERE conversation_id = ?').run(id)
     db.prepare('DELETE FROM conversations WHERE id = ?').run(id)
+    for (const row of orphanedFiles) deleteAttachmentFile(row.path)
   })
 
   ipcMain.handle('db:updateConversationTitle', (_e, id: number, title: string) => {
@@ -158,9 +176,15 @@ export function registerIpcHandlers() {
 
   ipcMain.handle('db:deleteAllConversations', () => {
     const db = getDb()
+    const orphanedFiles = db
+      .prepare(
+        "SELECT path FROM message_attachments WHERE storage = 'file' AND path IS NOT NULL",
+      )
+      .all() as { path: string }[]
     db.prepare('DELETE FROM conversation_summaries').run()
     db.prepare('DELETE FROM messages').run()
     db.prepare('DELETE FROM conversations').run()
+    for (const row of orphanedFiles) deleteAttachmentFile(row.path)
   })
 
   // Messages
@@ -225,13 +249,150 @@ export function registerIpcHandlers() {
       .prepare('SELECT conversation_id FROM messages WHERE id = ?')
       .get(id) as { conversation_id: number } | undefined
     if (!row) return { ok: false as const, error: 'Message not found' }
+    const orphanedFiles = db
+      .prepare(
+        "SELECT path FROM message_attachments WHERE message_id = ? AND storage = 'file' AND path IS NOT NULL",
+      )
+      .all(id) as { path: string }[]
     const result = db.prepare('DELETE FROM messages WHERE id = ?').run(id)
     if (result.changes !== 1) return { ok: false as const, error: 'Delete affected no rows' }
     db.prepare('UPDATE conversations SET updated_at = ? WHERE id = ?').run(
       Date.now(),
       row.conversation_id,
     )
+    for (const orphan of orphanedFiles) deleteAttachmentFile(orphan.path)
     return { ok: true as const }
+  })
+
+  ipcMain.handle(
+    'db:attachToMessage',
+    (_e, messageId: number, input: AttachmentInput) => {
+      if (typeof messageId !== 'number' || !Number.isFinite(messageId) || messageId <= 0) {
+        return { ok: false as const, error: 'Invalid message id' }
+      }
+      const validation = validateAttachmentInput(input)
+      if (!validation.ok) return validation
+      const db = getDb()
+      const exists = db
+        .prepare('SELECT id FROM messages WHERE id = ?')
+        .get(messageId) as { id: number } | undefined
+      if (!exists) return { ok: false as const, error: 'Message not found' }
+      const now = Date.now()
+      const inline = shouldStoreInline(input.byteSize)
+      let storagePath: string | null = null
+      let storageData: string | null = null
+      if (inline) {
+        storageData = input.base64
+      } else {
+        try {
+          storagePath = writeAttachmentToDisk(app.getPath('userData'), input.base64, input.mime)
+        } catch (err) {
+          return {
+            ok: false as const,
+            error: err instanceof Error ? err.message : 'Failed to write attachment to disk',
+          }
+        }
+      }
+      const result = db
+        .prepare(
+          `INSERT INTO message_attachments
+            (message_id, kind, mime, storage, data, path, width, height, byte_size, original_name, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          messageId,
+          input.kind,
+          input.mime,
+          inline ? 'inline' : 'file',
+          storageData,
+          storagePath,
+          input.width ?? null,
+          input.height ?? null,
+          input.byteSize,
+          input.originalName ?? null,
+          now,
+        )
+      const record: AttachmentRecord = {
+        id: result.lastInsertRowid as number,
+        message_id: messageId,
+        kind: input.kind,
+        mime: input.mime,
+        storage: inline ? 'inline' : 'file',
+        data: storageData,
+        path: storagePath,
+        width: input.width ?? null,
+        height: input.height ?? null,
+        byte_size: input.byteSize,
+        original_name: input.originalName ?? null,
+        created_at: now,
+      }
+      return { ok: true as const, attachment: record }
+    },
+  )
+
+  ipcMain.handle('db:getAttachmentsForMessage', (_e, messageId: number) => {
+    const db = getDb()
+    return db
+      .prepare(
+        'SELECT * FROM message_attachments WHERE message_id = ? ORDER BY created_at ASC, id ASC',
+      )
+      .all(messageId) as AttachmentRecord[]
+  })
+
+  ipcMain.handle('db:getAttachmentsForConversation', (_e, conversationId: number) => {
+    const db = getDb()
+    return db
+      .prepare(
+        `SELECT a.* FROM message_attachments a
+          JOIN messages m ON m.id = a.message_id
+          WHERE m.conversation_id = ?
+          ORDER BY a.created_at ASC, a.id ASC`,
+      )
+      .all(conversationId) as AttachmentRecord[]
+  })
+
+  ipcMain.handle('attachments:pickImage', async () => {
+    const window = getMainWindow()
+    const result = window
+      ? await dialog.showOpenDialog(window, {
+          title: 'Attach an image',
+          properties: ['openFile'],
+          filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp'] }],
+        })
+      : await dialog.showOpenDialog({
+          title: 'Attach an image',
+          properties: ['openFile'],
+          filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp'] }],
+        })
+    if (result.canceled || result.filePaths.length === 0) {
+      return { ok: false as const, cancelled: true }
+    }
+    const path = result.filePaths[0]
+    try {
+      const stats = statSync(path)
+      const mime = mimeForPath(path)
+      if (!mime) {
+        return {
+          ok: false as const,
+          error: 'Unsupported file type. Allowed: PNG, JPG, WEBP.',
+        }
+      }
+      const buf = readFileSync(path)
+      return {
+        ok: true as const,
+        file: {
+          base64: buf.toString('base64'),
+          byteSize: stats.size,
+          mime,
+          originalName: path.split('/').pop() ?? null,
+        },
+      }
+    } catch (err) {
+      return {
+        ok: false as const,
+        error: err instanceof Error ? err.message : 'Could not read file',
+      }
+    }
   })
 
   // Settings
@@ -407,6 +568,21 @@ export function registerIpcHandlers() {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+function mimeForPath(path: string): string | null {
+  const ext = extname(path).toLowerCase()
+  switch (ext) {
+    case '.png':
+      return 'image/png'
+    case '.jpg':
+    case '.jpeg':
+      return 'image/jpeg'
+    case '.webp':
+      return 'image/webp'
+    default:
+      return null
+  }
+}
 
 function toHealthUrl(url: string): string | null {
   try {
