@@ -211,6 +211,24 @@ export function registerIpcHandlers() {
       .all(conversationId)
   })
 
+  ipcMain.handle('db:deleteMessage', (_e, id: number) => {
+    if (typeof id !== 'number' || !Number.isFinite(id) || id <= 0) {
+      return { ok: false as const, error: 'Invalid message id' }
+    }
+    const db = getDb()
+    const row = db
+      .prepare('SELECT conversation_id FROM messages WHERE id = ?')
+      .get(id) as { conversation_id: number } | undefined
+    if (!row) return { ok: false as const, error: 'Message not found' }
+    const result = db.prepare('DELETE FROM messages WHERE id = ?').run(id)
+    if (result.changes !== 1) return { ok: false as const, error: 'Delete affected no rows' }
+    db.prepare('UPDATE conversations SET updated_at = ? WHERE id = ?').run(
+      Date.now(),
+      row.conversation_id,
+    )
+    return { ok: true as const }
+  })
+
   // Settings
   ipcMain.handle('db:getSetting', (_e, key: string) => {
     const db = getDb()

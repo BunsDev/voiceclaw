@@ -109,6 +109,10 @@ const electronAPI = {
       providers?: { sttProvider?: string, llmProvider?: string, ttsProvider?: string },
     ) => ipcRenderer.invoke('db:addMessage', conversationId, role, content, latency, providers),
     getMessages: (conversationId: number) => ipcRenderer.invoke('db:getMessages', conversationId),
+    deleteMessage: (id: number) =>
+      ipcRenderer.invoke('db:deleteMessage', id) as Promise<
+        { ok: true } | { ok: false; error: string }
+      >,
     getSetting: (key: string) => ipcRenderer.invoke('db:getSetting', key),
     setSetting: (key: string, value: string) => ipcRenderer.invoke('db:setSetting', key, value),
     getAllSettings: () => ipcRenderer.invoke('db:getAllSettings'),

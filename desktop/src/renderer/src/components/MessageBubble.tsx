@@ -1,20 +1,30 @@
+import type { MouseEvent } from 'react'
 import type { Message } from '../lib/db'
 
 interface MessageBubbleProps {
   message: Message
   showLatency?: boolean
+  onContextMenu?: (event: MouseEvent<HTMLDivElement>, message: Message) => void
 }
 
 const MD_IMAGE_REGEX = /!\[([^\]]*)\]\(([^)]+)\)/g
 const URL_IMAGE_REGEX = /(?:^|\s)(https?:\/\/\S+\.(?:png|jpg|jpeg|gif|webp)(?:\?\S*)?)/gi
 
-export function MessageBubble({ message, showLatency }: MessageBubbleProps) {
+export function MessageBubble({ message, showLatency, onContextMenu }: MessageBubbleProps) {
   const isUser = message.role === 'user'
   const parts = parseContent(message.content)
+
+  const handleContextMenu = onContextMenu
+    ? (e: MouseEvent<HTMLDivElement>) => {
+        e.preventDefault()
+        onContextMenu(e, message)
+      }
+    : undefined
 
   return (
     <div className={`flex ${isUser ? 'justify-end' : 'justify-start'} mb-3`}>
       <div
+        onContextMenu={handleContextMenu}
         className={`
           max-w-[80%] rounded-md px-4 py-2.5 text-sm leading-relaxed
           ${isUser
