@@ -1,16 +1,18 @@
 import type { MouseEvent } from 'react'
+import { Keyboard } from 'lucide-react'
 import type { Message } from '../lib/db'
 
 interface MessageBubbleProps {
   message: Message
   showLatency?: boolean
+  typed?: boolean
   onContextMenu?: (event: MouseEvent<HTMLDivElement>, message: Message) => void
 }
 
 const MD_IMAGE_REGEX = /!\[([^\]]*)\]\(([^)]+)\)/g
 const URL_IMAGE_REGEX = /(?:^|\s)(https?:\/\/\S+\.(?:png|jpg|jpeg|gif|webp)(?:\?\S*)?)/gi
 
-export function MessageBubble({ message, showLatency, onContextMenu }: MessageBubbleProps) {
+export function MessageBubble({ message, showLatency, typed, onContextMenu }: MessageBubbleProps) {
   const isUser = message.role === 'user'
   const parts = parseContent(message.content)
 
@@ -53,6 +55,12 @@ export function MessageBubble({ message, showLatency, onContextMenu }: MessageBu
             STT {Math.round(message.stt_latency_ms)}ms
             {message.llm_latency_ms != null && ` / LLM ${Math.round(message.llm_latency_ms)}ms`}
             {message.tts_latency_ms != null && ` / TTS ${Math.round(message.tts_latency_ms)}ms`}
+          </div>
+        )}
+        {typed && isUser && (
+          <div className="mt-1 flex items-center gap-1 text-[10px] opacity-60" title="Sent as typed text">
+            <Keyboard size={10} />
+            <span>typed</span>
           </div>
         )}
       </div>

@@ -1,0 +1,71 @@
+---
+title: Typing messages in the chat
+description: How to send typed messages to your VoiceClaw assistant from the desktop chat composer — for links, file paths, code, and anything else that voice gets wrong.
+---
+
+import { Aside } from '@astrojs/starlight/components'
+
+Voice is great when you want to think out loud, but it's the wrong tool for sharing a URL, pasting a stack trace, or naming a file path with three slashes and a dash. The desktop chat window has a typed-text composer at the bottom that's always available — during a call and outside one — so you can drop in the precise text you have in your clipboard and let the assistant respond.
+
+## Where it lives
+
+Open the **Chat** tab. At the bottom of the window, just above the call controls, there's a single-row text field with a send button on the right. It's persistent — it doesn't hide behind a button or a slash command. You can use it as your primary input, mix it with voice, or only reach for it when voice fails.
+
+The placeholder reminds you of the keys that matter:
+
+> Type a message — Enter sends, Shift+Enter for newline
+
+## How it works
+
+Type into the field and press **Enter** to send. The composer:
+
+- **Sends on Enter.** Press Enter and the message goes immediately. No need to click the send button (though you can).
+- **Inserts a newline on Shift+Enter.** Hold Shift and press Enter to add a line break — useful when you want to paste multi-line code or a list.
+- **Auto-resizes from 1 to 6 lines.** As you type or paste content, the field grows downward up to six lines, then becomes scrollable. It shrinks back as you delete.
+- **Preserves your text exactly.** Whatever you paste arrives at the assistant character-for-character: indentation, internal whitespace, query strings, fragment identifiers. The composer only trims trailing whitespace on submit so empty lines at the end don't bloat the prompt.
+- **Treats whitespace-only input as a no-op.** Press Enter on an empty field — nothing happens. The send button is disabled until you've typed something meaningful.
+
+A small **typed** label appears beneath any message you sent through the composer (a subtle keyboard glyph plus the word). Voice messages don't get the label. It's a quiet way to remind you, when reading back later, which exchanges came from speech and which from typing.
+
+## During a call vs outside one
+
+The composer works in both states. The path your message takes is different, but the result feels the same.
+
+**During a realtime call.** The typed text is delivered to the live session as a text input alongside whatever you're saying. The assistant treats it as a user turn — the realtime model sees the text, can call tools (including `ask_brain`), and responds with voice and a transcript exactly like a spoken turn. You'll hear the answer if your speakers are on, and it lands in the chat history. Useful when you want to drop the assistant a URL mid-conversation without breaking the flow.
+
+**Outside a call.** Typing a message opens a one-shot relay session, sends your text, streams the assistant's reply into the chat as text, and closes. No microphone access, no speaker output — pure text-in / text-out. Your message and the reply are both saved to the conversation, so the next time you start a call the model has the full context.
+
+In both modes the assistant has access to the same brain agent and the same tools. The only difference is whether you hear the reply or just read it.
+
+<Aside type="note">
+The typed-text path uses your existing relay server URL and API key. If those aren't configured in **Settings → Relay**, the composer will reply with a setup hint instead of trying to send the message.
+</Aside>
+
+## Practical examples
+
+A few things the composer is good at that voice tends to mangle:
+
+- **Links.** Paste a URL — `https://example.com/page?id=42&lang=en` — and the assistant sees the exact string. Voice transcription often drops query params, swaps slashes for "slash", and turns hyphens into pauses.
+- **File paths.** `/Users/jane/Library/Application Support/Voiceclaw/voiceclaw.sqlite` is a typing job, not a speaking job. Drop it into the composer and ask the assistant what's in it.
+- **Code snippets.** Paste a 40-line function and ask "what's wrong with this?" — the indentation, brackets, and identifiers all survive intact. Press Shift+Enter between paragraphs if you want to add context above and below the snippet.
+- **Precise messages you've already drafted.** Sometimes you've got the exact phrasing you want in another window. Copy it, paste it, send. No interpretation layer.
+
+## Keyboard shortcuts
+
+The chat window's existing shortcuts still work alongside the composer:
+
+| Shortcut | What it does |
+| --- | --- |
+| **Enter** (composer focused) | Send the typed message |
+| **Shift+Enter** (composer focused) | Insert a newline in the composer |
+| **Cmd+N** | Start a new conversation |
+| **Cmd+M** | Mute the microphone (during a call) |
+| **Cmd+E** | End the current call |
+
+The composer respects the OS clipboard. Cmd+V pastes the exact text from your clipboard, including hidden characters like tabs and newlines — there's no normalization, sanitization, or auto-formatting between the clipboard and the assistant.
+
+## When the composer goes quiet
+
+The composer can disable itself temporarily — for example while a previous typed message is still streaming a reply. The send button greys out and the field rejects Enter until the reply finishes. This prevents two parallel turns from racing each other in the same conversation.
+
+If you want to interrupt a long reply, end the call (Cmd+E) or start a new conversation (Cmd+N). Both wipe the in-flight state and let you start fresh.
