@@ -8,6 +8,7 @@ type WizardStepId =
   | 'permissions'
   | 'provider'
   | 'brain'
+  | 'identity'
   | 'testcall'
 
 type OnboardingPayload = {
@@ -19,6 +20,7 @@ type OnboardingPayload = {
   provider?: 'gemini' | 'openai' | 'xai'
   providerKeyValidated?: boolean
   brain?: 'openclaw' | 'claude' | 'codex' | { url: string }
+  identity?: { name?: string; description?: string; voice?: string }
   user?: { id?: string; email?: string | null; name?: string | null }
 }
 
@@ -155,6 +157,25 @@ const electronAPI = {
         claude: { available: boolean; path?: string }
         codex: { available: boolean; path?: string }
       }>,
+  },
+  identity: {
+    get: () =>
+      ipcRenderer.invoke('identity:get') as Promise<{
+        name: string
+        description: string
+        voice: string
+      }>,
+    save: (patch: { name?: string; description?: string; voice?: string }) =>
+      ipcRenderer.invoke('identity:save', patch) as Promise<{
+        name: string
+        description: string
+        voice: string
+      }>,
+    speakPreview: (params: { voice: string; text: string }) =>
+      ipcRenderer.invoke('identity:speakPreview', params) as Promise<
+        | { ok: true; audioBase64: string; mimeType: string }
+        | { ok: false; error: string }
+      >,
   },
   screen: {
     getSources: () =>

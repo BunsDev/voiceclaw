@@ -4,6 +4,12 @@ import { isLaunchAtLoginEnabled, setLaunchAtLogin } from './login-items'
 import { serviceManager } from './services/service-manager'
 import { buildRelayEnv } from './services/relay-server'
 import { applyGeminiKeyToOpenClawConfig } from './services/openclaw-gateway'
+import {
+  type AgentIdentity,
+  readAgentIdentity,
+  speakGreetingPreview,
+  writeAgentIdentity,
+} from './identity'
 import { getAllocatedPorts } from './ports'
 import {
   type OnboardingPayload,
@@ -314,6 +320,32 @@ export function registerIpcHandlers() {
 
   // Brain detection
   ipcMain.handle('brain:detect', () => detectBrains())
+
+  // Agent identity (name, description, voice) — persisted as IDENTITY.md
+  // in the bundled openclaw workspace so the relay's instruction builder
+  // picks it up without an extra config bridge.
+  ipcMain.handle('identity:get', () => readAgentIdentity())
+  ipcMain.handle('identity:save', (_e, patch: Partial<AgentIdentity>) => {
+    const saved = writeAgentIdentity(patch)
+    if (saved.voice) {
+      const db = getDb()
+      db.prepare(
+        'INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = ?',
+      ).run('realtime_voice', saved.voice, saved.voice)
+    }
+    serviceManager.restart('relay', () => buildRelayEnv()).catch((err) => {
+      console.warn('[relay] restart after identity save failed', err)
+    })
+    return saved
+  })
+  ipcMain.handle(
+    'identity:speakPreview',
+    async (_e, params: { voice: string; text: string }) => {
+      const apiKey = getProviderKey('gemini')
+      if (!apiKey) return { ok: false as const, error: 'No Gemini key configured.' }
+      return speakGreetingPreview({ apiKey, voice: params.voice, text: params.text })
+    },
+  )
 
   // Network: test relay server connection from main process (avoids CORS)
   ipcMain.handle('net:healthCheck', async (_e, url: string) => {

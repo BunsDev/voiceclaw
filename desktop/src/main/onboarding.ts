@@ -13,6 +13,7 @@ export type WizardStepId =
   | 'permissions'
   | 'provider'
   | 'brain'
+  | 'identity'
   | 'testcall'
 
 export type OnboardingPayload = {
@@ -24,6 +25,11 @@ export type OnboardingPayload = {
   provider?: 'gemini' | 'openai' | 'xai'
   providerKeyValidated?: boolean
   brain?: 'openclaw' | 'claude' | 'codex' | { url: string }
+  identity?: {
+    name?: string
+    description?: string
+    voice?: string
+  }
   user?: { id?: string; email?: string | null; name?: string | null }
 }
 

@@ -5,7 +5,9 @@ import { StepSignIn } from './StepSignIn'
 import { StepPermissions } from './StepPermissions'
 import { StepProvider } from './StepProvider'
 import { StepBrain } from './StepBrain'
+import { StepIdentity } from './StepIdentity'
 import { StepTestCall } from './StepTestCall'
+import { identityApi } from '../../lib/onboarding-api'
 import {
   onboarding,
   type OnboardingPayload,
@@ -15,7 +17,15 @@ import {
 
 export type { WizardStepId }
 
-const STEPS: WizardStepId[] = ['welcome', 'signin', 'permissions', 'provider', 'brain', 'testcall']
+const STEPS: WizardStepId[] = [
+  'welcome',
+  'signin',
+  'permissions',
+  'provider',
+  'brain',
+  'identity',
+  'testcall',
+]
 
 type Props = {
   initialState?: OnboardingState
@@ -74,6 +84,7 @@ export function OnboardingWizard({ initialState, onComplete, previewMode = false
             await onboarding.updateStep('testcall', patch)
           }
           await onboarding.complete()
+          await window.electronAPI.db.setSetting('pending_greeting', 'true')
         } catch (err) {
           console.warn('[onboarding] complete failed', err)
         }
@@ -140,6 +151,18 @@ export function OnboardingWizard({ initialState, onComplete, previewMode = false
           previewMode={previewMode}
         />
       )
+    case 'identity':
+      return (
+        <StepIdentity
+          onContinue={(patch) => {
+            void persistIdentity(patch.identity, previewMode).then(() => next(patch))
+          }}
+          onBack={back}
+          onStartOver={startOver}
+          initialIdentity={payload.identity ?? {}}
+          previewMode={previewMode}
+        />
+      )
     case 'testcall':
       return (
         <StepTestCall
@@ -177,4 +200,16 @@ function resolveInitialBrainId(
   if (!brain) return 'openclaw'
   if (typeof brain === 'object') return 'custom'
   return brain
+}
+
+async function persistIdentity(
+  identity: OnboardingPayload['identity'],
+  previewMode: boolean,
+): Promise<void> {
+  if (previewMode || !identity) return
+  try {
+    await identityApi.save(identity)
+  } catch (err) {
+    console.warn('[onboarding] identity save failed', err)
+  }
 }

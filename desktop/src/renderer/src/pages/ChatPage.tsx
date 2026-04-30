@@ -89,6 +89,8 @@ export function ChatPage() {
     })
   }, [])
 
+  const greetingTriggeredRef = useRef(false)
+
   const loadLatestConversation = async () => {
     const conv = await getLatestConversation()
     if (conv) {
@@ -268,6 +270,19 @@ export function ChatPage() {
       tracingEnabled,
     })
   }, [realtime, outputGain])
+
+  useEffect(() => {
+    if (greetingTriggeredRef.current) return
+    greetingTriggeredRef.current = true
+    void (async () => {
+      const pending = await getSetting('pending_greeting')
+      if (pending !== 'true') return
+      await setSetting('pending_greeting', 'false')
+      setTimeout(() => {
+        if (!isCallActive && !isConnecting) startCall()
+      }, 600)
+    })()
+  }, [isCallActive, isConnecting, startCall])
 
   const endCall = useCallback(() => {
     realtime.stop()

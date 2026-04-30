@@ -5,6 +5,7 @@ import { Card } from '../components/ui/Card'
 import { Input } from '../components/ui/Input'
 import { Select } from '../components/ui/Select'
 import { Toggle } from '../components/ui/Toggle'
+import { identityApi } from '../lib/onboarding-api'
 import { useTheme, type Theme } from '../lib/use-theme'
 import { enumerateAudioDevices, type AudioDevice } from '../lib/audio-engine'
 import { getSetting, setSetting } from '../lib/db'
@@ -77,6 +78,11 @@ export function SettingsPage() {
   const [showLatency, setShowLatency] = useState(false)
   const [tracingEnabled, setTracingEnabled] = useState(false)
 
+  // Agent identity (name + description)
+  const [agentName, setAgentName] = useState('')
+  const [agentDescription, setAgentDescription] = useState('')
+  const identityLoadedRef = useRef(false)
+
   // Privacy / telemetry
   const [telemetryEnabled, setTelemetryEnabled] = useState(true)
 
@@ -130,6 +136,15 @@ export function SettingsPage() {
       if (sl === 'true') setShowLatency(true)
       const tr = await getSetting('tracing_enabled')
       if (tr === 'true') setTracingEnabled(true)
+
+      try {
+        const id = await identityApi.get()
+        setAgentName(id.name)
+        setAgentDescription(id.description)
+      } catch {
+        // identity bridge unavailable — leave defaults
+      }
+      identityLoadedRef.current = true
 
       const optedOut = await isOptedOutRenderer()
       setTelemetryEnabled(!optedOut)
@@ -234,6 +249,36 @@ export function SettingsPage() {
     setTracingEnabled(v)
     setSetting('tracing_enabled', v ? 'true' : 'false')
   }, [])
+
+  const persistIdentity = useCallback(
+    (next: { name?: string; description?: string }) => {
+      if (!identityLoadedRef.current) return
+      identityApi
+        .save({
+          name: next.name ?? agentName,
+          description: next.description ?? agentDescription,
+          voice,
+        })
+        .catch((err) => console.warn('[settings] identity save failed', err))
+    },
+    [agentName, agentDescription, voice],
+  )
+
+  const updateAgentName = useCallback(
+    (v: string) => {
+      setAgentName(v)
+      persistIdentity({ name: v })
+    },
+    [persistIdentity],
+  )
+
+  const updateAgentDescription = useCallback(
+    (v: string) => {
+      setAgentDescription(v)
+      persistIdentity({ description: v })
+    },
+    [persistIdentity],
+  )
 
   const toggleTelemetry = useCallback(async (v: boolean) => {
     setTelemetryEnabled(v)
@@ -343,6 +388,32 @@ export function SettingsPage() {
             <Button variant="ghost" size="sm" onClick={resetBundled} disabled={resetting}>
               {resetting ? 'Resetting…' : 'Reset to bundled defaults'}
             </Button>
+          </div>
+        </Card>
+
+        {/* Identity */}
+        <Card className="p-4 space-y-4">
+          <h3 className="text-sm font-semibold text-foreground">Agent Identity</h3>
+          <div className="space-y-1.5">
+            <label className="text-xs text-muted-foreground">Name</label>
+            <Input
+              value={agentName}
+              onChange={(e) => updateAgentName(e.target.value)}
+              placeholder="Pam"
+            />
+          </div>
+          <div className="space-y-1.5">
+            <label className="text-xs text-muted-foreground">Description</label>
+            <textarea
+              value={agentDescription}
+              onChange={(e) => updateAgentDescription(e.target.value)}
+              placeholder="Friendly, calm, helps me stay on top of things."
+              rows={2}
+              className="w-full resize-none rounded-md border border-input bg-background px-3 py-2 text-sm leading-snug outline-none ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+            />
+            <p className="text-[11px] text-muted-foreground">
+              Used in the agent's system prompt. Saved as IDENTITY.md in the bundled openclaw workspace.
+            </p>
           </div>
         </Card>
 

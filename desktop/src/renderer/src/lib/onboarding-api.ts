@@ -7,6 +7,7 @@ export type WizardStepId =
   | 'permissions'
   | 'provider'
   | 'brain'
+  | 'identity'
   | 'testcall'
 
 export type ProviderId = 'gemini' | 'openai' | 'xai'
@@ -18,6 +19,12 @@ export type PermissionStatus =
   | 'restricted'
   | 'unknown'
 
+export type AgentIdentityPatch = {
+  name?: string
+  description?: string
+  voice?: string
+}
+
 export type OnboardingPayload = {
   signedIn?: boolean
   permissions?: {
@@ -27,6 +34,7 @@ export type OnboardingPayload = {
   provider?: ProviderId
   providerKeyValidated?: boolean
   brain?: 'openclaw' | 'claude' | 'codex' | { url: string }
+  identity?: AgentIdentityPatch
   user?: { id?: string; email?: string | null; name?: string | null }
 }
 
@@ -75,6 +83,18 @@ declare global {
       brain: {
         detect: () => Promise<BrainDetection>
       }
+      identity: {
+        get: () => Promise<{ name: string; description: string; voice: string }>
+        save: (patch: AgentIdentityPatch) => Promise<{
+          name: string
+          description: string
+          voice: string
+        }>
+        speakPreview: (params: { voice: string; text: string }) => Promise<
+          | { ok: true; audioBase64: string; mimeType: string }
+          | { ok: false; error: string }
+        >
+      }
     }
   }
 }
@@ -107,4 +127,11 @@ export const providerApi = {
 
 export const brainApi = {
   detect: () => window.electronAPI.brain.detect(),
+}
+
+export const identityApi = {
+  get: () => window.electronAPI.identity.get(),
+  save: (patch: AgentIdentityPatch) => window.electronAPI.identity.save(patch),
+  speakPreview: (params: { voice: string; text: string }) =>
+    window.electronAPI.identity.speakPreview(params),
 }
