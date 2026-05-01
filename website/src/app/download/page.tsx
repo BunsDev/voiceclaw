@@ -11,6 +11,7 @@ import {
 import { BrandWordmark } from "@/components/brand/brand-system"
 import { ThemeSwitcher } from "@/components/theme-switcher"
 import { TrackCtaAnchor } from "@/components/telemetry/track-cta-anchor"
+import { getLatestMacReleaseDownload } from "@/lib/downloads"
 
 const REPO_URL = "https://github.com/yagudaev/voiceclaw"
 const RELEASES_URL = "https://github.com/yagudaev/voiceclaw/releases"
@@ -30,6 +31,7 @@ type DownloadPageProps = {
 export default async function DownloadPage({ searchParams }: DownloadPageProps) {
   const params = (await searchParams) ?? {}
   const isEmpty = params.empty === "1"
+  const release = await getLatestMacReleaseDownload()
 
   return (
     <main className="min-h-screen bg-[var(--brand-paper)] text-[var(--brand-ink)]">
@@ -47,7 +49,7 @@ export default async function DownloadPage({ searchParams }: DownloadPageProps) 
             click the mic, and start talking.
           </p>
 
-          {isEmpty ? <EmptyStateNotice /> : <DownloadCard />}
+          {isEmpty ? <EmptyStateNotice /> : <DownloadCard version={release?.tagName} sizeBytes={release?.size} />}
 
           <div className="mt-10 grid gap-4 sm:grid-cols-3">
             <InfoTile
@@ -99,19 +101,24 @@ function Header() {
   )
 }
 
-function DownloadCard() {
+function DownloadCard({ version, sizeBytes }: { version?: string; sizeBytes?: number }) {
+  const versionLabel = formatVersion(version)
+  const sizeLabel = formatSize(sizeBytes)
+  const subtitleParts = ["Universal DMG — Apple Silicon and Intel in a single file."]
+  if (sizeLabel) subtitleParts.push(sizeLabel)
+
   return (
     <div className="mt-10 rounded-md border border-[var(--brand-line-strong)] bg-[var(--brand-panel)] p-6 shadow-[var(--brand-shadow)] sm:p-8">
       <div className="flex flex-col gap-5 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <p className="font-mono text-xs uppercase tracking-[0.24em] text-[var(--brand-muted)]">
-            Latest release
+            Latest release{versionLabel ? ` · ${versionLabel}` : ""}
           </p>
           <p className="mt-3 font-serif text-2xl text-[var(--brand-ink)] sm:text-3xl">
             VoiceClaw for macOS
           </p>
           <p className="mt-2 text-sm leading-6 text-[var(--brand-muted)]">
-            Universal DMG — Apple Silicon and Intel in a single file.
+            {subtitleParts.join(" · ")}
           </p>
         </div>
         <TrackCtaAnchor
@@ -267,4 +274,17 @@ function friendlyHost(url: string): string {
   } catch {
     return url
   }
+}
+
+function formatVersion(tagName?: string): string | null {
+  if (!tagName) return null
+  const match = tagName.match(/(\d+\.\d+\.\d+(?:-[\w.]+)?)/)
+  return match ? `v${match[1]}` : tagName
+}
+
+function formatSize(bytes?: number): string | null {
+  if (!bytes || bytes <= 0) return null
+  const mb = bytes / (1024 * 1024)
+  if (mb < 1024) return `${Math.round(mb)} MB`
+  return `${(mb / 1024).toFixed(2)} GB`
 }
