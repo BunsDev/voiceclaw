@@ -247,9 +247,10 @@ export class OpenAIAdapter implements ProviderAdapter {
       })
 
       this.upstream.on("close", (code, reason) => {
-        log(`[${this.providerName}] Upstream closed: ${code} ${String(reason)}`)
+        const reasonText = reason instanceof Buffer ? reason.toString("utf8") : String(reason)
+        log(`[${this.providerName}] Upstream closed: ${code} ${reasonText}`)
         if (!this.isRotating && code !== 1000) {
-          const mapped = mapAdapterError(this.providerName, null, null)
+          const mapped = mapAdapterError(this.providerName, null, reasonText || null)
           this.sendToClient?.({
             type: "error",
             message: mapped.userMessage,
@@ -532,15 +533,22 @@ export class OpenAIAdapter implements ProviderAdapter {
       }
 
       // Errors
-      case "error":
-        logError(`[${this.providerName}] Error: ${event.error?.message ?? event}`)
+      case "error": {
+        const errorMessage: string = event.error?.message ?? "upstream error"
+        logError(`[${this.providerName}] Error: ${errorMessage}`)
         this.resetResponseState()
+        const parsedStatus = parseStatusFromMessage(errorMessage)
+        const mapped = mapAdapterError(this.providerName, parsedStatus, errorMessage)
         this.sendToClient?.({
           type: "error",
-          message: event.error?.message ?? "upstream error",
-          code: 502,
+          message: errorMessage,
+          code: parsedStatus ?? 502,
+          userMessage: mapped.userMessage,
+          actionUrl: mapped.actionUrl,
+          httpStatus: parsedStatus,
         })
         break
+      }
 
       // Rate limits (log only)
       case "rate_limits.updated":
@@ -736,4 +744,14 @@ function pickEarliest(a: number | null, b: number | null): number | null {
   if (a == null) return b
   if (b == null) return a
   return Math.min(a, b)
+}
+
+// Extract an HTTP status code embedded in a WebSocket error message.
+// xAI and OpenAI sometimes embed status codes as trailing numbers, e.g.
+// "Unexpected server response: 429".
+function parseStatusFromMessage(message: string): number | null {
+  const m = message.match(/(\d{3})\s*$/)
+  if (!m) return null
+  const n = parseInt(m[1], 10)
+  return n >= 400 && n < 600 ? n : null
 }

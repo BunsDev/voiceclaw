@@ -179,7 +179,21 @@ export class GeminiAdapter implements ProviderAdapter {
 
       const onError = (err: Error) => {
         logError("[gemini] WebSocket error:", err.message)
-        finish(err)
+        if (settled) {
+          // Post-setup WS error — parse any embedded status and surface it.
+          const parsedStatus = parseStatusFromErrorMessage(err.message)
+          const mapped = mapAdapterError("gemini", parsedStatus, err.message)
+          this.sendToClient?.({
+            type: "error",
+            message: err.message,
+            code: parsedStatus ?? 502,
+            userMessage: mapped.userMessage,
+            actionUrl: mapped.actionUrl,
+            httpStatus: parsedStatus,
+          })
+        } else {
+          finish(err)
+        }
       }
 
       const onClose = (code: number, reason: Buffer) => {
@@ -1050,5 +1064,12 @@ function findModalityTokens(
   modality: string,
 ): number | undefined {
   return details?.find((d) => d.modality === modality)?.tokenCount
+}
+
+function parseStatusFromErrorMessage(message: string): number | null {
+  const m = message.match(/(\d{3})\s*$/)
+  if (!m) return null
+  const n = parseInt(m[1], 10)
+  return n >= 400 && n < 600 ? n : null
 }
 
