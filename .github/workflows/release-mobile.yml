@@ -1,0 +1,180 @@
+# Build the VoiceClaw iOS IPA on a macOS runner and upload to TestFlight
+# via eas submit on mobile-v* tag pushes.
+#
+# Mirrors the release-desktop.yml pattern: xcodebuild on macos-14,
+# existing Apple secrets, same ASC API key setup.
+#
+# Required repository secrets (Settings → Secrets and variables → Actions):
+#   APPLE_API_KEY_P8
+#     Base64-encoded contents of the App Store Connect API key .p8 file.
+#   APPLE_API_KEY_ID
+#     The App Store Connect API key ID (e.g. `SG645CPQP8`).
+#   APPLE_API_ISSUER
+#     The App Store Connect issuer UUID.
+#   IOS_DIST_CERT_P12
+#     Base64-encoded .p12 export of the "Apple Distribution" certificate
+#     (the iOS App Store distribution cert, NOT the macOS "Developer ID
+#     Application" cert — they are different). Export from Keychain Access,
+#     right-click the "Apple Distribution: ..." cert → Export → .p12, then:
+#       base64 -i cert.p12 | pbcopy
+#     ⚠ BLOCKER: this secret does not exist yet in the repo. The workflow
+#     will fail at the cert-import step until it is added.
+#     See PR body for details.
+#   IOS_DIST_CERT_PASSWORD
+#     The password chosen when exporting the iOS Distribution .p12.
+#   EXPO_TOKEN
+#     Expo account token used by `eas submit`. Already in repo.
+#
+# NOTE on eas.json staging profile: the ascApiKeyPath is currently a local
+# absolute path (/Users/michaelyagudaev/...). The CI step below writes the
+# .p8 to ~/.appstore/ on the runner, which resolves correctly for the
+# production profile (uses ~/). The staging profile will fall back to the
+# env-var-based key lookup that EAS CLI performs via EXPO_TOKEN + the key
+# written to ~/.appstore/. If EAS prompts interactively, update eas.json
+# staging.ios.ascApiKeyPath to use ~/ instead of the absolute path.
+
+name: Release mobile
+
+on:
+  push:
+    tags:
+      - "mobile-v*.*.*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to build (must already exist on origin)"
+        required: true
+      variant:
+        description: "Build variant"
+        type: choice
+        options:
+          - staging
+          - production
+        default: staging
+      submit:
+        description: "Submit to TestFlight after build? Set false to build only (dry-run)."
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build + submit iOS IPA
+    runs-on: macos-14
+    timeout-minutes: 90
+    env:
+      VARIANT: ${{ inputs.variant || 'staging' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Enable corepack
+        run: corepack enable
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: "yarn"
+
+      - name: Install dependencies
+        run: yarn install --immutable
+
+      - name: Write App Store Connect API key
+        env:
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+        run: |
+          mkdir -p ~/.appstore
+          printf '%s' "$APPLE_API_KEY_P8" | base64 --decode > ~/.appstore/AuthKey_${APPLE_API_KEY_ID}.p8
+          chmod 600 ~/.appstore/AuthKey_${APPLE_API_KEY_ID}.p8
+
+      - name: Import iOS Distribution certificate
+        # Imports the "Apple Distribution" cert (App Store signing) into a
+        # temporary keychain so xcodebuild --CODE_SIGN_STYLE=Automatic can
+        # find it. This cert is DIFFERENT from the macOS "Developer ID
+        # Application" cert used by release-desktop.yml.
+        #
+        # ⚠ BLOCKER: IOS_DIST_CERT_P12 + IOS_DIST_CERT_PASSWORD secrets
+        # must be added to the repo before this step will succeed.
+        # See PR body for instructions.
+        env:
+          IOS_DIST_CERT_P12: ${{ secrets.IOS_DIST_CERT_P12 }}
+          IOS_DIST_CERT_PASSWORD: ${{ secrets.IOS_DIST_CERT_PASSWORD }}
+        run: |
+          set +x
+          KEYCHAIN_NAME="ios-build.keychain"
+          KEYCHAIN_PASSWORD="$(openssl rand -hex 16)"
+          CERT_FILE="$(mktemp /tmp/ios-dist-XXXXXX.p12)"
+
+          printf '%s' "$IOS_DIST_CERT_P12" | base64 --decode > "$CERT_FILE"
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_NAME"
+          security set-keychain-settings -lut 7200 "$KEYCHAIN_NAME"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_NAME"
+          security import "$CERT_FILE" \
+            -k "$KEYCHAIN_NAME" \
+            -P "$IOS_DIST_CERT_PASSWORD" \
+            -T /usr/bin/codesign \
+            -T /usr/bin/xcodebuild \
+            -A
+          security set-key-partition-list \
+            -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_NAME"
+          security list-keychains -d user -s "$KEYCHAIN_NAME" login.keychain
+
+          rm -f "$CERT_FILE"
+
+          # Verify the cert was imported and is an iOS Distribution cert
+          security find-identity -v -p codesigning "$KEYCHAIN_NAME" | grep -E "(Apple Distribution|iPhone Distribution)" \
+            || { echo "FAIL: no iOS Distribution cert found in keychain (is IOS_DIST_CERT_P12 an Apple Distribution cert?)" ; exit 1; }
+
+      - name: Resolve build metadata
+        id: meta
+        run: |
+          echo "git_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          MOBILE_VERSION=$(node -p "require('./mobile/package.json').version")
+          echo "mobile_version=$MOBILE_VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Build IPA
+        working-directory: mobile
+        env:
+          APP_VARIANT: ${{ env.VARIANT }}
+          ASC_API_KEY_PATH: ${{ format('/Users/runner/.appstore/AuthKey_{0}.p8', secrets.APPLE_API_KEY_ID) }}
+          ASC_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          ASC_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER }}
+        run: |
+          set -o pipefail
+          mkdir -p ../build-logs
+          APP_VARIANT="$APP_VARIANT" \
+          ASC_API_KEY_PATH="$ASC_API_KEY_PATH" \
+          ASC_API_KEY_ID="$ASC_API_KEY_ID" \
+          ASC_API_ISSUER_ID="$ASC_API_ISSUER_ID" \
+            ./scripts/build-ios.sh 2>&1 | tee ../build-logs/xcodebuild.log
+
+      - name: Submit to TestFlight
+        # Tag-push: inputs.submit is undefined → treated as true (default).
+        # workflow_dispatch submit=true: proceed.
+        # workflow_dispatch submit=false: skip.
+        if: ${{ inputs.submit != 'false' }}
+        working-directory: mobile
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+          APP_VARIANT: ${{ env.VARIANT }}
+        run: yarn "submit:ios:$APP_VARIANT"
+
+      - name: Upload IPA + build log as artifact
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: voiceclaw-ios-${{ env.VARIANT }}-${{ steps.meta.outputs.mobile_version }}
+          path: |
+            mobile/build/export/*.ipa
+            build-logs/xcodebuild.log
+          if-no-files-found: warn
+          retention-days: 14
