@@ -39,6 +39,7 @@ extraResources:
       - "**/*"
       - "!**/*.{md,LICENSE*,*.map,*.ts}"
       - "!**/CHANGELOG*"
+      - "openclaw/docs/reference/templates/**"
 
 mac:
   category: public.app-category.productivity

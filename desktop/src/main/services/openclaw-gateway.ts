@@ -143,10 +143,6 @@ async function ensureWorkspaceBootstrap(params: {
 }): Promise<void> {
   const sentinelPath = join(params.stateDir, 'workspace-bootstrapped')
   if (existsSync(sentinelPath)) return
-  if (existsSync(join(params.workspaceDir, 'IDENTITY.md'))) {
-    writeFileSync(sentinelPath, new Date().toISOString() + '\n')
-    return
-  }
   mkdirSync(params.workspaceDir, { recursive: true })
   const logStream = openLogStream('openclaw-setup.log')
   logStream.write(`\n[openclaw-setup] running setup at ${new Date().toISOString()}\n`)
