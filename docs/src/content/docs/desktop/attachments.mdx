@@ -1,0 +1,71 @@
+---
+title: Image attachments in chat
+description: How to attach an image to a VoiceClaw desktop conversation — drag and drop, paste from clipboard, or pick from disk — and what happens when you do.
+---
+
+import { Aside } from '@astrojs/starlight/components'
+
+VoiceClaw desktop lets you drop an image straight into the conversation. Sketches, screenshots, photos of a whiteboard — anything PNG, JPEG, or WEBP up to 10 MB. The image lives in the chat alongside the rest of the transcript, and if a call is active when you attach, it's also forwarded to the assistant so it can see what you're talking about.
+
+This is the first slice of a broader "attach files" capability. PDFs, code files, and other document types are not yet supported — see [Limitations](#limitations) below.
+
+## How to attach
+
+There are three ways to add an image to the current conversation:
+
+- **Drag and drop.** Drag an image file from Finder (or any other source that exposes a real file) onto the chat area. The window dims and shows a "Drop image to attach" hint while you're hovering — release the mouse to add the image to the pending tray.
+- **Paste from clipboard.** Copy an image — a screenshot taken with `Cmd+Shift+4`, an image you copied from a webpage, anything that lands on the system clipboard as an image — and paste with `Cmd+V` while the chat window has focus.
+- **The Attach button.** Click **Attach** in the top-right of the chat header. A native open-file dialog appears, filtered to PNG / JPG / WEBP.
+
+In all three cases the image lands in a small **pending tray** at the bottom of the chat. You can drop several images in a row before sending; each shows a thumbnail with a small `×` you can click to remove it before it's committed. Click **Send** to attach all pending images to a new user message in the conversation.
+
+## What happens after you click Send
+
+When you send pending attachments:
+
+1. A new user message is added to the conversation with a short placeholder (e.g. `Attached: photo.png`). This is what the conversation list and history will show as the message body.
+2. Each image is saved locally with the message — you don't configure anything.
+3. If a call is active, the image is also forwarded to the assistant the same way a shared screen would be, so the model can see and reason about it during the call.
+
+The thumbnails render inline in the chat bubble. Click a thumbnail to open the image full-size in a new window.
+
+## Validation and limits
+
+VoiceClaw enforces these rules before an attachment is accepted:
+
+- **Allowed types:** `image/png`, `image/jpeg`, `image/webp`.
+- **Maximum size:** 10 MB per file.
+- **Non-empty:** zero-byte files are rejected.
+
+If a file fails validation — wrong type, too large, empty — the attachment is dropped and a one-line error appears just above the pending tray. Click the small `×` on the error to dismiss it. Other valid files in the same drop or paste are still accepted.
+
+## Deleting attachments
+
+Attachments are tied to the message that owns them. The message-level controls handle them automatically:
+
+- **Delete a single message** (right-click a message → **Delete message**) removes the message and every attachment it had — both DB rows and any files on disk.
+- **Delete a conversation** removes every message in it and every attachment file those messages owned.
+- **Delete all conversations** clears every message and every attachment file across the local database.
+
+There is no separate "delete just one attachment" menu — attachments live and die with their parent message.
+
+<Aside type="caution">
+Attachment cleanup is local and permanent. Once a parent message is deleted, the attachment files on disk are unlinked too — there is no in-app undo or trash. Make a copy of any source image you want to keep before deleting the message that owns it.
+</Aside>
+
+## What gets sent to the assistant
+
+VoiceClaw uses the same multimodal channel that screen sharing already uses to push image frames to the realtime model. When you attach an image during an active call, the model sees the image as part of its current visual context and can describe, transcribe, or reason about it the same way it does a shared screen.
+
+If you attach an image while no call is in progress, the image is persisted in chat history but is not retroactively replayed to the model the next time you call. The next call starts with the conversation transcript only.
+
+## Limitations
+
+The MVP intentionally keeps this small:
+
+- **Images only.** PNGs, JPEGs, and WEBPs only. PDFs, plain-text code, and other document types are a planned follow-up.
+- **No re-encoding or compression.** The image is stored as-is. Very tall or very wide images render scaled down in the bubble but the underlying file is untouched.
+- **No reordering or editing in the pending tray.** Attached, then changed your mind? Click the `×` on the thumbnail and re-attach.
+- **One placeholder message per send.** All pending images attach to a single new user message.
+
+Broader file types (PDFs, code, generic documents) and richer composer integration will come in a follow-up ticket once the multimodal pipeline is exercised in the wild on images.

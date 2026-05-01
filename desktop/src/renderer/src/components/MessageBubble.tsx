@@ -1,9 +1,10 @@
 import type { MouseEvent } from 'react'
 import { Keyboard } from 'lucide-react'
-import type { Message } from '../lib/db'
+import { attachmentDataUrl, type Attachment, type Message } from '../lib/db'
 
 interface MessageBubbleProps {
   message: Message
+  attachments?: Attachment[]
   showLatency?: boolean
   typed?: boolean
   onContextMenu?: (event: MouseEvent<HTMLDivElement>, message: Message) => void
@@ -12,9 +13,23 @@ interface MessageBubbleProps {
 const MD_IMAGE_REGEX = /!\[([^\]]*)\]\(([^)]+)\)/g
 const URL_IMAGE_REGEX = /(?:^|\s)(https?:\/\/\S+\.(?:png|jpg|jpeg|gif|webp)(?:\?\S*)?)/gi
 
-export function MessageBubble({ message, showLatency, typed, onContextMenu }: MessageBubbleProps) {
+export function MessageBubble({
+  message,
+  attachments,
+  showLatency,
+  typed,
+  onContextMenu,
+}: MessageBubbleProps) {
   const isUser = message.role === 'user'
   const parts = parseContent(message.content)
+  const visibleAttachments = (attachments ?? []).filter(
+    (a) => a.kind === 'image' && attachmentDataUrl(a) !== null,
+  )
+
+  const handleOpenAttachment = (attachment: Attachment) => {
+    const url = attachmentDataUrl(attachment)
+    if (url) window.open(url, '_blank', 'noopener,noreferrer')
+  }
 
   const handleContextMenu = onContextMenu
     ? (e: MouseEvent<HTMLDivElement>) => {
@@ -49,6 +64,30 @@ export function MessageBubble({ message, showLatency, typed, onContextMenu }: Me
               loading="lazy"
             />
           ),
+        )}
+        {visibleAttachments.length > 0 && (
+          <div className="mt-2 flex flex-wrap gap-2">
+            {visibleAttachments.map((a) => {
+              const url = attachmentDataUrl(a)
+              if (!url) return null
+              return (
+                <button
+                  key={a.id}
+                  type="button"
+                  onClick={() => handleOpenAttachment(a)}
+                  className="block rounded-md overflow-hidden border border-border/60 hover:border-primary transition-colors"
+                  title={a.original_name ?? 'Attached image'}
+                >
+                  <img
+                    src={url}
+                    alt={a.original_name ?? 'Attached image'}
+                    className="max-h-64 max-w-full object-contain block"
+                    loading="lazy"
+                  />
+                </button>
+              )
+            })}
+          </div>
         )}
         {showLatency && message.stt_latency_ms != null && (
           <div className="text-[10px] mt-1.5 opacity-50">

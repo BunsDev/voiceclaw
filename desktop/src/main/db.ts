@@ -55,6 +55,23 @@ function runMigrations(db: Database.Database) {
 
     CREATE INDEX IF NOT EXISTS idx_messages_conversation_id ON messages(conversation_id);
 
+    CREATE TABLE IF NOT EXISTS message_attachments (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+      kind TEXT NOT NULL CHECK(kind IN ('image')),
+      mime TEXT NOT NULL,
+      storage TEXT NOT NULL CHECK(storage IN ('inline', 'file')),
+      data TEXT,
+      path TEXT,
+      width INTEGER,
+      height INTEGER,
+      byte_size INTEGER NOT NULL,
+      original_name TEXT,
+      created_at INTEGER NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_attachments_message_id ON message_attachments(message_id);
+
     CREATE TABLE IF NOT EXISTS settings (
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL
