@@ -36,7 +36,7 @@ export interface SessionConfigEvent {
   }
   watchdog?: "enabled" | "disabled"
   instructionsOverride?: string
-  conversationHistory?: { role: "user" | "assistant", text: string }[]
+  conversationHistory?: { role: "user" | "assistant", text: string, timestamp?: number, relativeMs?: number }[]
 }
 
 export interface AudioAppendEvent {

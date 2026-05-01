@@ -1,11 +1,14 @@
 import type { MouseEvent } from 'react'
 import { Keyboard } from 'lucide-react'
 import { attachmentDataUrl, type Attachment, type Message } from '../lib/db'
+import { formatExactTimestamp } from '../lib/message-grouping'
 
 interface MessageBubbleProps {
   message: Message
   attachments?: Attachment[]
   showLatency?: boolean
+  showTimestamp?: boolean
+  isLastInBurst?: boolean
   typed?: boolean
   onContextMenu?: (event: MouseEvent<HTMLDivElement>, message: Message) => void
 }
@@ -17,6 +20,8 @@ export function MessageBubble({
   message,
   attachments,
   showLatency,
+  showTimestamp,
+  isLastInBurst,
   typed,
   onContextMenu,
 }: MessageBubbleProps) {
@@ -38,10 +43,14 @@ export function MessageBubble({
       }
     : undefined
 
+  const burstSpacing = isLastInBurst === false ? 'mb-0.5' : 'mb-3'
+  const exactTime = formatExactTimestamp(message.created_at)
+
   return (
-    <div className={`flex ${isUser ? 'justify-end' : 'justify-start'} mb-3`}>
+    <div className={`flex ${isUser ? 'justify-end' : 'justify-start'} ${burstSpacing}`}>
       <div
         onContextMenu={handleContextMenu}
+        title={exactTime}
         className={`
           max-w-[80%] rounded-md px-4 py-2.5 text-sm leading-relaxed
           ${isUser
@@ -88,6 +97,9 @@ export function MessageBubble({
               )
             })}
           </div>
+        )}
+        {showTimestamp && (
+          <div className="text-[10px] mt-1.5 opacity-60">{exactTime}</div>
         )}
         {showLatency && message.stt_latency_ms != null && (
           <div className="text-[10px] mt-1.5 opacity-50">

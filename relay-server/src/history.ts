@@ -18,7 +18,12 @@ import { log, error as logError } from "./log.js"
 
 export const RECENT_TURNS_VERBATIM = 8
 
-export type HistoryMessage = { role: "user" | "assistant", text: string }
+export type HistoryMessage = {
+  role: "user" | "assistant"
+  text: string
+  timestamp?: number
+  relativeMs?: number
+}
 
 export interface HistorySplit {
   recent: HistoryMessage[]
@@ -48,19 +53,26 @@ export function formatSummaryPreamble(summary: string): string {
   return `## Earlier in this conversation\n${summary.trim()}`
 }
 
+export function formatStampedTurnText(m: HistoryMessage): string {
+  const stamp = formatRelativeStamp(deriveRelativeMs(m))
+  return stamp ? `${stamp} ${m.text}` : m.text
+}
+
 export function formatRecentTurnsPreamble(recent: HistoryMessage[]): string {
   const lines = recent
     .map((m) => {
       const text = typeof m.text === "string" ? m.text.trim() : ""
       if (!text) return null
       const speaker = m.role === "assistant" ? "Assistant" : "User"
-      return `${speaker}: ${text}`
+      const stamp = formatRelativeStamp(deriveRelativeMs(m))
+      return stamp ? `${stamp} ${speaker}: ${text}` : `${speaker}: ${text}`
     })
     .filter((l): l is string => l !== null)
   if (lines.length === 0) return ""
   return [
     "## Most recent turns (verbatim)",
     "Treat these as already-spoken context. Do not re-greet or restate them; pick up naturally where the conversation left off.",
+    "Each turn is prefixed with how long ago it occurred relative to now, e.g. \"[3m ago]\". Use these stamps to answer questions like \"what did we talk about 5 minutes ago?\".",
     "",
     ...lines,
   ].join("\n")
@@ -183,6 +195,24 @@ async function fetchWithTimeout(
   } finally {
     clearTimeout(timer)
   }
+}
+
+function deriveRelativeMs(m: HistoryMessage): number | undefined {
+  if (typeof m.relativeMs === "number") return m.relativeMs
+  if (typeof m.timestamp === "number") return Math.max(0, Date.now() - m.timestamp)
+  return undefined
+}
+
+function formatRelativeStamp(relativeMs: number | undefined): string | null {
+  if (typeof relativeMs !== "number" || relativeMs < 0) return null
+  const sec = Math.floor(relativeMs / 1000)
+  if (sec < 60) return `[${sec}s ago]`
+  const min = Math.floor(sec / 60)
+  if (min < 60) return `[${min}m ago]`
+  const hr = Math.floor(min / 60)
+  if (hr < 24) return `[${hr}h ago]`
+  const day = Math.floor(hr / 24)
+  return `[${day}d ago]`
 }
 
 function fallbackTruncatedSummary(older: HistoryMessage[]): string {

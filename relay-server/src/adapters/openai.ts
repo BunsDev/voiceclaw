@@ -5,7 +5,7 @@ import type { SessionConfigEvent } from "../types.js"
 import type { AdapterCapabilities, ProviderAdapter, SendToClient } from "./types.js"
 import { buildInstructions } from "../instructions.js"
 import { getTools } from "../tools/index.js"
-import { buildHistorySplit, formatSummaryPreamble, type HistoryMessage } from "../history.js"
+import { buildHistorySplit, formatStampedTurnText, formatSummaryPreamble, type HistoryMessage } from "../history.js"
 import { log, error as logError } from "../log.js"
 
 const OPENAI_REALTIME_URL = "wss://api.openai.com/v1/realtime"
@@ -257,7 +257,7 @@ export class OpenAIAdapter implements ProviderAdapter {
         item: {
           type: "message",
           role: turn.role,
-          content: [{ type: contentType, text: turn.text }],
+          content: [{ type: contentType, text: formatStampedTurnText(turn) }],
         },
       })
     }

@@ -7,7 +7,7 @@ export interface TextChatOptions {
   sessionKey?: string
   tavilyApiKey?: string
   instructionsOverride?: string
-  conversationHistory?: { role: 'user' | 'assistant', text: string }[]
+  conversationHistory?: { role: 'user' | 'assistant', text: string, timestamp?: number }[]
   deviceContext?: { timezone?: string, locale?: string, deviceModel?: string }
 }
 

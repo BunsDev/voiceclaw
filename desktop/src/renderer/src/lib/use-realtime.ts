@@ -39,7 +39,7 @@ export interface RealtimeConfig {
     deviceModel?: string
   }
   instructionsOverride?: string
-  conversationHistory?: { role: 'user' | 'assistant', text: string }[]
+  conversationHistory?: { role: 'user' | 'assistant', text: string, timestamp?: number, relativeMs?: number }[]
   tracingEnabled?: boolean
 }
 

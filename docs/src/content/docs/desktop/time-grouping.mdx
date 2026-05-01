@@ -1,0 +1,58 @@
+---
+title: Time grouping in chat
+description: How VoiceClaw desktop groups nearby messages, surfaces day boundaries, and lets you reveal exact timestamps — like iMessage.
+---
+
+import { Aside } from '@astrojs/starlight/components'
+
+Long voice conversations can produce a lot of message bubbles. To keep the transcript scannable, VoiceClaw desktop groups nearby messages into bursts and only labels the boundaries — the same pattern iMessage uses. You can still see the exact send time of any individual message when you need it.
+
+## How grouping works
+
+Messages collapse into a single burst when they're all from the same speaker (you or the agent) and arrive within roughly a minute of each other. Inside a burst:
+
+- Bubbles sit closer together — the small per-message gap shrinks so the burst reads as one continuous thought.
+- Only the **first** bubble in the burst is preceded by a separator label.
+- Per-message timestamps are hidden until you ask for them.
+
+A new burst — and therefore a new separator — starts whenever:
+
+- The speaker switches between you and the agent.
+- More than a minute has passed since the previous message.
+- The day changes (see below).
+
+## Separators
+
+Every burst is preceded by a small, centered label.
+
+- **Day boundaries** show the day plus the time of the first message in the burst:
+  - `Today 9:14 AM`
+  - `Yesterday 10:42 PM`
+  - `Tuesday 8:03 AM` for anything within the last week
+  - `Mar 12 4:51 PM` (or with the year, for older conversations)
+- **Within a day**, separators show how long ago the burst started:
+  - `just now`
+  - `5 min ago`
+  - `2 hr ago`
+  - For older bursts on the same day, the clock time (`11:42 AM`) so the label doesn't drift as time passes.
+
+The labels are deliberately understated — small, uppercase, low-contrast — so they fade into the background while the message bubbles stay the focus.
+
+## Reveal exact timestamps
+
+Sometimes you need the precise time a message landed — to correlate with a calendar event, a log entry, or what someone else was doing.
+
+Two ways to see it:
+
+- **Hover** any message bubble and the browser tooltip shows the exact timestamp (formatted relative to today: `9:14 AM`, `Yesterday 9:14 AM`, `Mon 9:14 AM`, or a full date for older messages).
+- **Right-click** any message and choose **Show times**. Every message in the conversation grows a tiny timestamp under its content. Right-click again and pick **Hide times** to collapse them back.
+
+Show times is a single conversation-wide toggle, not per-message — when you want timestamps, you almost always want them on every message in view.
+
+<Aside type="note">
+The toggle resets when you start a new conversation or restart the app. It's a transient view setting, not a saved preference.
+</Aside>
+
+## What the agent sees
+
+The grouping is purely a UI concern — it doesn't change what the assistant receives. But the assistant does get enough timing context to answer questions like _"what did we talk about five minutes ago?"_ without having to guess from the order alone.
