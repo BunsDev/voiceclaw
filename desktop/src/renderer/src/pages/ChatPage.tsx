@@ -809,16 +809,6 @@ export function ChatPage() {
             : 'Start a conversation'}
         </div>
         <div className="flex items-center gap-1">
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={handlePickImage}
-            title="Attach an image (PNG, JPG, WEBP, ≤10MB)"
-            aria-label="Attach an image"
-          >
-            <ImagePlus size={16} className="mr-1" />
-            Attach
-          </Button>
           <Button variant="ghost" size="sm" onClick={newConversation}>
             <Plus size={16} className="mr-1" />
             New
@@ -944,7 +934,11 @@ export function ChatPage() {
       />
 
       {/* Typed text composer — always visible, works in and out of call */}
-      <ChatComposer onSubmit={handleComposerSubmit} disabled={isThinking || !!streamingText} />
+      <ChatComposer
+        onSubmit={handleComposerSubmit}
+        onAttach={handlePickImage}
+        disabled={isThinking || !!streamingText}
+      />
 
       {/* Call controls */}
       <div className="px-4 py-3 border-t border-border flex items-center justify-center gap-3">

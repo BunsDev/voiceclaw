@@ -6,7 +6,7 @@ import {
   useState,
   type KeyboardEvent,
 } from 'react'
-import { Send } from 'lucide-react'
+import { Paperclip, Send } from 'lucide-react'
 import { Button } from './ui/Button'
 import {
   COMPOSER_LIMITS,
@@ -16,11 +16,12 @@ import {
 
 export interface ChatComposerProps {
   onSubmit: (text: string) => void
+  onAttach?: () => void
   disabled?: boolean
   placeholder?: string
 }
 
-export function ChatComposer({ onSubmit, disabled, placeholder }: ChatComposerProps) {
+export function ChatComposer({ onSubmit, onAttach, disabled, placeholder }: ChatComposerProps) {
   const [value, setValue] = useState('')
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
@@ -59,6 +60,18 @@ export function ChatComposer({ onSubmit, disabled, placeholder }: ChatComposerPr
   return (
     <div className="px-4 py-3 border-t border-border bg-background/80 backdrop-blur">
       <div className="flex items-end gap-2">
+        {onAttach && (
+          <Button
+            variant="default"
+            size="icon"
+            onClick={onAttach}
+            disabled={disabled}
+            aria-label="Attach an image"
+            title="Attach an image (PNG, JPG, WEBP, ≤10MB)"
+          >
+            <Paperclip size={18} />
+          </Button>
+        )}
         <textarea
           ref={textareaRef}
           value={value}
