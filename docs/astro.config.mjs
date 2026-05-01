@@ -86,9 +86,11 @@ export default defineConfig({
             { slug: 'desktop/call-bar', label: 'Desktop: floating call bar' },
             { slug: 'desktop/volume-control', label: 'Desktop: agent volume control' },
             { slug: 'desktop/chat-actions', label: 'Desktop: chat actions (right-click menu)' },
+            { slug: 'desktop/typing-messages', label: 'Desktop: typing messages' },
             { slug: 'desktop/attachments', label: 'Desktop: image attachments' },
             { slug: 'desktop/releasing', label: 'Desktop: releasing' },
             { slug: 'mobile-app' },
+            { slug: 'canvas-mode', label: 'Canvas mode (in design)', badge: { text: 'Preview', variant: 'note' } },
           ],
         },
         {

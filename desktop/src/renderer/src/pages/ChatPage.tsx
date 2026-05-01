@@ -22,6 +22,7 @@ import {
 } from 'lucide-react'
 import { Button } from '../components/ui/Button'
 import { AttachmentTray } from '../components/AttachmentTray'
+import { ChatComposer } from '../components/ChatComposer'
 import { MessageBubble } from '../components/MessageBubble'
 import { MessageContextMenu, type MessageContextMenuItem } from '../components/MessageContextMenu'
 import { ThinkingDots } from '../components/ThinkingDots'
@@ -62,6 +63,7 @@ import {
   type PendingAttachment,
 } from '../lib/attachments'
 import { getVoiceForProvider, providerForModel } from '../lib/voice-prefs'
+import { streamTextChat } from '../lib/text-chat'
 
 const DEFAULT_REALTIME_MODEL = 'gemini-3.1-flash-live-preview'
 const REALTIME_MODELS = ['gemini-3.1-flash-live-preview', 'grok-voice-think-fast-1.0'] as const
@@ -94,6 +96,7 @@ export function ChatPage() {
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const activeRelayUrlRef = useRef<string>('')
   const brainCallStartRef = useRef<Map<string, number>>(new Map())
+  const textChatCancelRef = useRef<(() => void) | null>(null)
   const [messageMenu, setMessageMenu] = useState<{ x: number; y: number; message: Message } | null>(null)
   const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([])
   const [attachments, setAttachments] = useState<Attachment[]>([])
@@ -101,6 +104,7 @@ export function ChatPage() {
   const [isDraggingFile, setIsDraggingFile] = useState(false)
   const [sendingAttachments, setSendingAttachments] = useState(false)
   const dragDepthRef = useRef(0)
+  const [typedMessageIds, setTypedMessageIds] = useState<Set<number>>(() => new Set())
   const { selectedConversationId, selectConversation } = useConversationContext()
 
   const attachmentsByMessage = useMemo(() => {
@@ -460,6 +464,102 @@ export function ChatPage() {
     }
   }, [toggleMute, endCall])
 
+  const handleComposerSubmit = useCallback(async (text: string) => {
+    const convId = await ensureConversation()
+    const persisted = await addMessage(convId, 'user', text)
+    setTypedMessageIds((prev) => {
+      const next = new Set(prev)
+      next.add(persisted.id)
+      return next
+    })
+    await loadMessages()
+
+    if (!titleGeneratedRef.current) {
+      titleGeneratedRef.current = true
+      const title = generateTitle(text)
+      updateConversationTitle(convId, title).catch((err) =>
+        console.warn('[ChatPage] Failed to update title:', err),
+      )
+    }
+
+    if (realtimeRef.current?.isConnected) {
+      const ok = realtimeRef.current.sendUserText(text)
+      if (!ok) console.warn('[ChatPage] sendUserText failed — websocket not open')
+      return
+    }
+
+    const serverUrl = (await getSetting('realtime_server_url')) || (await defaultRelayUrl())
+    const apiKey = (await getSetting('realtime_api_key')) || ''
+    if (!apiKey) {
+      await addMessage(
+        convId,
+        'assistant',
+        'Add a Brain Gateway URL and API key in Settings to chat with the assistant.',
+      )
+      await loadMessages()
+      return
+    }
+    const model = normalizeRealtimeModel(await getSetting('realtime_model'))
+    const provider = providerForModel(model)
+    const voice = await getVoiceForProvider(provider)
+    const tavilyEnabled = (await getSetting('tavily_enabled')) !== 'false'
+    const tavilyApiKey = tavilyEnabled
+      ? ((await getSetting('tavily_api_key')) || undefined)
+      : undefined
+    const recent = (await getMessages(convId))
+      .filter((m) => m.role === 'user' || m.role === 'assistant')
+      .slice(-20, -1)
+      .map((m) => ({ role: m.role as 'user' | 'assistant', text: m.content }))
+
+    setIsThinking(true)
+    streamingRoleRef.current = 'assistant'
+    setStreamingRole('assistant')
+    textChatCancelRef.current?.()
+    textChatCancelRef.current = streamTextChat(text, {
+      serverUrl,
+      apiKey,
+      provider: provider === 'gemini' ? 'gemini' : provider === 'xai' ? 'xai' : 'openai',
+      model,
+      voice,
+      tavilyApiKey,
+      sessionKey: `voiceclaw-desktop:${convId}`,
+      conversationHistory: recent.length > 0 ? recent : undefined,
+      deviceContext: {
+        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+        locale: navigator.language,
+        deviceModel: 'Desktop (Electron)',
+      },
+    }, {
+      onToken: (full) => {
+        setIsThinking(false)
+        setStreamingText(full)
+      },
+      onDone: async (full) => {
+        setStreamingText('')
+        setIsThinking(false)
+        textChatCancelRef.current = null
+        if (full.trim()) {
+          await addMessage(convId, 'assistant', full)
+          await loadMessages()
+        }
+      },
+      onError: async (err) => {
+        setStreamingText('')
+        setIsThinking(false)
+        textChatCancelRef.current = null
+        await addMessage(convId, 'assistant', `Error: ${err}`)
+        await loadMessages()
+      },
+    })
+  }, [loadMessages])
+
+  useEffect(() => {
+    return () => {
+      textChatCancelRef.current?.()
+      textChatCancelRef.current = null
+    }
+  }, [])
+
   const newConversation = useCallback(() => {
     if (isCallActive) endCall()
     conversationIdRef.current = null
@@ -469,6 +569,7 @@ export function ChatPage() {
     setPendingAttachments([])
     setAttachmentError(null)
     setToolCalls([])
+    setTypedMessageIds(new Set())
     titleGeneratedRef.current = false
   }, [isCallActive, endCall])
 
@@ -728,6 +829,7 @@ export function ChatPage() {
               message={item.data}
               attachments={attachmentsByMessage.get(item.data.id) ?? []}
               showLatency={showLatency}
+              typed={typedMessageIds.has(item.data.id)}
               onContextMenu={handleMessageContextMenu}
             />
           ) : (
@@ -812,6 +914,9 @@ export function ChatPage() {
         onSend={handleSendAttachments}
         sending={sendingAttachments}
       />
+
+      {/* Typed text composer — always visible, works in and out of call */}
+      <ChatComposer onSubmit={handleComposerSubmit} disabled={isThinking || !!streamingText} />
 
       {/* Call controls */}
       <div className="px-4 py-3 border-t border-border flex items-center justify-center gap-3">

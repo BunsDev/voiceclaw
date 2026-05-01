@@ -67,6 +67,7 @@ export interface RealtimeControls {
   setOutputVolume: (volume: number) => void
   setOutputMuted: (muted: boolean) => void
   sendFrame: (base64Jpeg: string) => void
+  sendUserText: (text: string) => boolean
   getInputLevel: () => number
   getOutputLevel: () => number
   isConnected: boolean
@@ -385,6 +386,13 @@ export function useRealtime(callbacks: RealtimeCallbacks): RealtimeControls {
     }
   }, [])
 
+  const sendUserText = useCallback((text: string) => {
+    if (!text) return false
+    if (wsRef.current?.readyState !== WebSocket.OPEN) return false
+    wsRef.current.send(JSON.stringify({ type: 'text.input', text }))
+    return true
+  }, [])
+
   const getInputLevel = useCallback(() => {
     return engineRef.current?.getInputLevel() ?? 0
   }, [])
@@ -400,6 +408,7 @@ export function useRealtime(callbacks: RealtimeCallbacks): RealtimeControls {
     setOutputVolume,
     setOutputMuted,
     sendFrame,
+    sendUserText,
     getInputLevel,
     getOutputLevel,
     isConnected,

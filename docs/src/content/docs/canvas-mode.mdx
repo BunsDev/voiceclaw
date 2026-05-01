@@ -1,0 +1,51 @@
+---
+title: Canvas mode
+description: A persistent collaborative surface that lives next to the voice call. Status — in design.
+---
+
+import { Aside } from '@astrojs/starlight/components'
+
+<Aside type="note" title="Status: in design">
+Canvas mode is being designed right now — none of this ships yet. Track the work on [NAN-678](https://linear.app/nano3labs/issue/NAN-678/explore-canvas-mode-for-voiceclaw-voice-chat-collaboration). What you read below is the intended feel, not a build log.
+</Aside>
+
+Today, every collaboration with VoiceClaw lives in chat bubbles. You speak, the AI speaks back, and the transcript scrolls. That is a great rhythm for thinking out loud, but it is the wrong shape for the moments when you actually want to *make* something — a plan, an outline, a doc, a draft email, a small interactive tool you reach for again tomorrow.
+
+Canvas mode adds a second surface alongside the call. The voice conversation stays where it is. To the right, a quiet workspace opens up — the kind of thing that feels like a sheet of paper, not a chat window — and the AI writes into it as you talk. You watch the document take shape. You can grab the keyboard and edit it yourself mid-call. The canvas is the artifact you keep when the call ends.
+
+## What it will feel like
+
+Picture the desktop app split in two. On the left, the familiar transcript and call controls. On the right, a cream page in the same warm editorial style as the rest of VoiceClaw — serif headings, generous margins, real typography — with the document the AI is helping you build.
+
+Say *"let's plan the talk for next week"* and a working outline appears, section by section, while you keep talking. Reorder a bullet by voice. Drop in a quote you read this morning. Ask the AI to tighten the intro. Close the call and the document is just there in your conversation history, ready to copy out, export, or pick up tomorrow.
+
+## Two flavours
+
+There are two kinds of canvas worth thinking about, and they answer different questions.
+
+**A writing canvas** — markdown-first, text-shaped. Notes, outlines, plans, specs, drafts, checklists. The thing most calls actually need. Edits are predictable, the format travels (paste it into Notion, into a PR description, into an email), and the AI can update it with surgical edits rather than rewriting the world every turn.
+
+**A free-form canvas** — the AI assembles a small UI surface for you. A dashboard for the numbers you just talked about. A form. A generated tool you use once and discard, or pin and keep. Closer in spirit to Anthropic's Artifacts or OpenAI's Canvas than to a doc.
+
+Both are interesting. They probably do not need to launch together. The first one — the quiet writing surface — is what the typical VoiceClaw call is missing today, so it is the most likely starting point.
+
+## What stays the same
+
+- **Voice is still primary.** The canvas is a companion to the call, not a replacement for it. You can ignore it entirely and VoiceClaw works exactly as it does today.
+- **Local-first.** Canvases live in the same local SQLite store as your transcripts. No cloud sync until you ask for it.
+- **One conversation, one canvas.** Each conversation in your history can carry a canvas alongside it. Open the conversation later and the canvas is right where you left it.
+
+## Open questions
+
+A few things are genuinely unsettled and worth flagging:
+
+- Whether the canvas should open automatically the moment the AI decides to write something down, or only when you explicitly ask for one.
+- Whether the writing canvas and the free-form UI canvas eventually merge into one surface, or stay deliberately separate.
+- How aggressive the AI should be about taking the keyboard from you — full rewrites are easy to reason about but disruptive; small targeted edits feel right but are harder to land predictably.
+
+If you have an opinion on any of these, drop it on the ticket — that is genuinely how this gets shaped.
+
+## Track the work
+
+- Feature ticket — [NAN-678 — Explore canvas mode for VoiceClaw voice chat collaboration](https://linear.app/nano3labs/issue/NAN-678/explore-canvas-mode-for-voiceclaw-voice-chat-collaboration)
+- Discussion — open a thread on the ticket or in the VoiceClaw repo

@@ -1,10 +1,12 @@
 import type { MouseEvent } from 'react'
+import { Keyboard } from 'lucide-react'
 import { attachmentDataUrl, type Attachment, type Message } from '../lib/db'
 
 interface MessageBubbleProps {
   message: Message
   attachments?: Attachment[]
   showLatency?: boolean
+  typed?: boolean
   onContextMenu?: (event: MouseEvent<HTMLDivElement>, message: Message) => void
 }
 
@@ -15,6 +17,7 @@ export function MessageBubble({
   message,
   attachments,
   showLatency,
+  typed,
   onContextMenu,
 }: MessageBubbleProps) {
   const isUser = message.role === 'user'
@@ -91,6 +94,12 @@ export function MessageBubble({
             STT {Math.round(message.stt_latency_ms)}ms
             {message.llm_latency_ms != null && ` / LLM ${Math.round(message.llm_latency_ms)}ms`}
             {message.tts_latency_ms != null && ` / TTS ${Math.round(message.tts_latency_ms)}ms`}
+          </div>
+        )}
+        {typed && isUser && (
+          <div className="mt-1 flex items-center gap-1 text-[10px] opacity-60" title="Sent as typed text">
+            <Keyboard size={10} />
+            <span>typed</span>
           </div>
         )}
       </div>
