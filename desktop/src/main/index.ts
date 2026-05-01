@@ -3,7 +3,7 @@ import { join } from 'node:path'
 import { registerIpcHandlers } from './ipc-handlers'
 import { registerScreenCaptureHandlers } from './screen-capture'
 import { closeDb, getDb } from './db'
-import { createTray, destroyTray, setTrayState } from './tray'
+import { createTray, destroyTray, rebuildTrayMenu, setTrayState } from './tray'
 import {
   createMainWindow,
   getMainWindow,
@@ -31,6 +31,7 @@ import {
 import { startBundledRelayServer } from './services/relay-server'
 import { ensureDefault as ensureLaunchAtLoginDefault } from './login-items'
 import { initAutoUpdater } from './updater'
+import { setRebuildTray } from './services/auto-updater'
 import {
   ensureBundledRelayDefaults,
   ensureOnboardingSchema,
@@ -119,6 +120,7 @@ app.whenReady().then(async () => {
       app.quit()
     },
   })
+  setRebuildTray(rebuildTrayMenu)
 
   serviceManager.on('change', () => refreshTrayState())
 

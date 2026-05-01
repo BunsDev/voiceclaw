@@ -76,6 +76,15 @@ export type ProviderInfo = {
   ttsProvider?: string
 }
 
+export type UpdateState = {
+  currentVersion: string
+  stagedVersion: string | null
+  lastChecked: number | null
+  status: 'idle' | 'checking' | 'available' | 'downloading' | 'staged' | 'up-to-date' | 'error'
+  releaseNotes: string | null
+  error: string | null
+}
+
 declare global {
   interface Window {
     electronAPI: {
@@ -121,6 +130,13 @@ declare global {
       }
       attachments?: {
         pickImage: () => Promise<PickImageResult>
+      }
+      updates: {
+        getState: () => Promise<UpdateState>
+        checkNow: () => Promise<UpdateState>
+        installNow: (source: 'banner' | 'settings' | 'tray') => Promise<void>
+        onStateChanged: (handler: (state: UpdateState) => void) => () => void
+        onStaged: (handler: (payload: { version: string; releaseNotes: string | null }) => void) => () => void
       }
     }
   }

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import type { UpdateState } from '../lib/db'
 import { Wifi, WifiOff, Eye, EyeOff } from 'lucide-react'
 import { Button } from '../components/ui/Button'
 import { Card } from '../components/ui/Card'
@@ -94,6 +95,10 @@ export function SettingsPage() {
   // Privacy / telemetry
   const [telemetryEnabled, setTelemetryEnabled] = useState(true)
 
+  // Updates
+  const [updateState, setUpdateState] = useState<UpdateState | null>(null)
+  const [checkingUpdate, setCheckingUpdate] = useState(false)
+
   const loadedRef = useRef(false)
 
   // Load all settings on mount
@@ -159,6 +164,14 @@ export function SettingsPage() {
     })()
 
     enumerateAudioDevices().then(setAudioDevices).catch(console.error)
+  }, [])
+
+  useEffect(() => {
+    const api = window.electronAPI?.updates
+    if (!api) return
+    api.getState().then(setUpdateState).catch(() => {})
+    const remove = api.onStateChanged(setUpdateState)
+    return remove
   }, [])
 
   // Save setting to DB immediately
@@ -633,6 +646,85 @@ export function SettingsPage() {
           </div>
         </Card>
 
+        {/* Updates */}
+        <Card className="p-4 space-y-4">
+          <h3 className="text-sm font-semibold text-foreground">Updates</h3>
+
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm text-foreground">Current version</p>
+              <p className="text-xs text-muted-foreground">{updateState?.currentVersion ?? '—'}</p>
+            </div>
+            {updateState?.currentVersion && (
+              <a
+                href={`https://github.com/yagudaev/voiceclaw/releases/tag/desktop-v${updateState.currentVersion}`}
+                target="_blank"
+                rel="noreferrer"
+                className="text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
+              >
+                View release notes
+              </a>
+            )}
+          </div>
+
+          {updateState?.lastChecked && (
+            <p className="text-xs text-muted-foreground">
+              Last checked: {relativeTime(updateState.lastChecked)}
+            </p>
+          )}
+
+          {updateState?.status === 'staged' && updateState.stagedVersion && (
+            <div className="flex items-center justify-between rounded-md border border-[var(--brand-sage)] bg-[var(--brand-sage-wash)] px-3 py-2">
+              <div>
+                <p className="text-sm text-foreground font-medium">
+                  Update ready: {updateState.stagedVersion}
+                </p>
+                <p className="text-xs text-muted-foreground">Restart to apply</p>
+              </div>
+              <Button
+                variant="default"
+                size="sm"
+                onClick={async () => {
+                  await window.electronAPI.updates.installNow('settings')
+                }}
+              >
+                Restart now
+              </Button>
+            </div>
+          )}
+
+          {updateState?.status === 'error' && updateState.error && (
+            <p className="text-xs text-destructive">{updateState.error}</p>
+          )}
+
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={checkingUpdate || updateState?.status === 'checking' || updateState?.status === 'downloading'}
+              onClick={async () => {
+                setCheckingUpdate(true)
+                try {
+                  const next = await window.electronAPI.updates.checkNow()
+                  setUpdateState(next)
+                } finally {
+                  setCheckingUpdate(false)
+                }
+              }}
+            >
+              {(checkingUpdate || updateState?.status === 'checking') ? 'Checking…'
+                : updateState?.status === 'downloading' ? 'Downloading…'
+                : 'Check for updates'}
+            </Button>
+            {updateState?.status === 'up-to-date' && (
+              <span className="text-xs text-muted-foreground">Up to date</span>
+            )}
+            {updateState?.status === 'downloading' && (
+              <span className="text-xs text-muted-foreground">Downloading in background…</span>
+            )}
+          </div>
+        </Card>
+
         {/* Debug */}
         <Card className="p-4 space-y-4">
           <h3 className="text-sm font-semibold text-foreground">Debug</h3>
@@ -812,6 +904,14 @@ function showPrivacyPreview(): Promise<{ proceed: boolean; suppress: boolean }> 
       }
     })
   })
+}
+
+function relativeTime(ts: number): string {
+  const diff = Math.round((Date.now() - ts) / 1000)
+  if (diff < 60) return 'just now'
+  if (diff < 3600) return `${Math.floor(diff / 60)} minutes ago`
+  if (diff < 86400) return `${Math.floor(diff / 3600)} hours ago`
+  return `${Math.floor(diff / 86400)} days ago`
 }
 
 function maskKey(key: string): string {

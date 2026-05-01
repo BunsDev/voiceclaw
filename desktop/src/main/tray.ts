@@ -1,6 +1,7 @@
 import { app, Menu, nativeImage, Tray, type NativeImage } from 'electron'
 import { join } from 'node:path'
 import { serviceManager, type ServiceStatus } from './services/service-manager'
+import { getUpdateState, installNow } from './services/auto-updater'
 
 // Menu bar presence. The tray icon lives in the system menu bar (top-right
 // on macOS) and is the always-on entry point to VoiceClaw when the main
@@ -44,6 +45,10 @@ export function destroyTray(): void {
   tray = null
 }
 
+export function rebuildTrayMenu(): void {
+  rebuildMenu()
+}
+
 // ---------------------------------------------------------------------------
 // Internals
 // ---------------------------------------------------------------------------
@@ -78,6 +83,7 @@ function rebuildMenu(): void {
       submenu: serviceMenuItems(statuses),
     },
     { type: 'separator' },
+    ...updateMenuItems(),
     {
       label: 'Quit VoiceClaw',
       accelerator: 'Command+Q',
@@ -143,6 +149,24 @@ function prettyServiceName(name: string): string {
     default:
       return name
   }
+}
+
+function updateMenuItems(): Electron.MenuItemConstructorOptions[] {
+  const updateState = getUpdateState()
+  const items: Electron.MenuItemConstructorOptions[] = [
+    {
+      label: `VoiceClaw ${updateState.currentVersion}`,
+      enabled: false,
+    },
+  ]
+  if (updateState.stagedVersion) {
+    items.push({
+      label: `Install and Restart: ${updateState.stagedVersion}`,
+      click: () => installNow('tray'),
+    })
+  }
+  items.push({ type: 'separator' })
+  return items
 }
 
 function buildIcon(_state: TrayState): NativeImage {

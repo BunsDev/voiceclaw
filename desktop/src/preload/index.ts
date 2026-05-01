@@ -240,6 +240,45 @@ const electronAPI = {
   net: {
     healthCheck: (url: string) => ipcRenderer.invoke('net:healthCheck', url) as Promise<{ ok: boolean, error?: string }>,
   },
+  updates: {
+    getState: () =>
+      ipcRenderer.invoke('updates:getState') as Promise<{
+        currentVersion: string
+        stagedVersion: string | null
+        lastChecked: number | null
+        status: string
+        releaseNotes: string | null
+        error: string | null
+      }>,
+    checkNow: () =>
+      ipcRenderer.invoke('updates:checkNow') as Promise<{
+        currentVersion: string
+        stagedVersion: string | null
+        lastChecked: number | null
+        status: string
+        releaseNotes: string | null
+        error: string | null
+      }>,
+    installNow: (source: 'banner' | 'settings' | 'tray') =>
+      ipcRenderer.invoke('updates:installNow', source) as Promise<void>,
+    onStateChanged: (handler: (state: {
+      currentVersion: string
+      stagedVersion: string | null
+      lastChecked: number | null
+      status: string
+      releaseNotes: string | null
+      error: string | null
+    }) => void) => {
+      const wrapped = (_e: IpcRendererEvent, s: Parameters<typeof handler>[0]) => handler(s)
+      ipcRenderer.on('updates:stateChanged', wrapped)
+      return () => ipcRenderer.removeListener('updates:stateChanged', wrapped)
+    },
+    onStaged: (handler: (payload: { version: string; releaseNotes: string | null }) => void) => {
+      const wrapped = (_e: IpcRendererEvent, p: Parameters<typeof handler>[0]) => handler(p)
+      ipcRenderer.on('updates:staged', wrapped)
+      return () => ipcRenderer.removeListener('updates:staged', wrapped)
+    },
+  },
   telemetry: {
     getDistinctId: () => ipcRenderer.invoke('telemetry:getDistinctId') as Promise<string>,
     getOptedOut: () => ipcRenderer.invoke('telemetry:getOptedOut') as Promise<boolean>,

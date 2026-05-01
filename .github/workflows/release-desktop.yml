@@ -173,6 +173,22 @@ jobs:
             dist/latest-mac.yml \
             --clobber
 
+      - name: Publish update feed to main
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git fetch origin main
+          git checkout main
+          cp desktop/dist/latest-mac.yml desktop/releases/latest-mac.yml
+          git add desktop/releases/latest-mac.yml
+          git diff --cached --quiet && echo "No feed change" && exit 0
+          git commit -m "chore(desktop): update release feed for ${TAG}"
+          git push origin main
+
       - name: Upload DMG as workflow artifact
         if: always()
         uses: actions/upload-artifact@v7

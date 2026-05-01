@@ -40,6 +40,11 @@ import {
   validateProviderKey,
 } from './provider-keys'
 import { detectBrains } from './brain-detect'
+import {
+  checkForUpdatesNow,
+  getUpdateState,
+  installNow,
+} from './services/auto-updater'
 import { startSignInFlow } from './auth'
 import { getMainWindow } from './window-lifecycle'
 import {
@@ -546,6 +551,16 @@ export function registerIpcHandlers() {
       shell.showItemInFolder(result.path)
     }
     return result
+  })
+
+  // Updates
+  ipcMain.handle('updates:getState', () => {
+    const s = getUpdateState()
+    return { ...s, currentVersion: app.getVersion() }
+  })
+  ipcMain.handle('updates:checkNow', () => checkForUpdatesNow())
+  ipcMain.handle('updates:installNow', (_e, source: 'banner' | 'settings' | 'tray' = 'settings') => {
+    installNow(source)
   })
 
   // Network: test relay server connection from main process (avoids CORS)

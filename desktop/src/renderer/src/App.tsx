@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { TabBar, type TabId } from './components/TabBar'
+import { UpdateBanner } from './components/UpdateBanner'
 import { ChatPage } from './pages/ChatPage'
 import { HistoryPage } from './pages/HistoryPage'
 import { SettingsPage } from './pages/SettingsPage'
@@ -119,6 +120,7 @@ export function App() {
   return (
     <ConversationProvider>
       <div className="h-screen flex flex-col bg-background text-foreground vc-window-surface">
+        <UpdateBanner />
         <TabBar activeTab={activeTab} onTabChange={setActiveTab} />
         <main className="flex-1 flex flex-col overflow-hidden relative">
           <div className={`flex-1 flex flex-col overflow-hidden ${activeTab !== 'chat' ? 'hidden' : ''}`}>
