@@ -163,17 +163,18 @@ export class GeminiAdapter implements ProviderAdapter {
           const mapped = mapAdapterError("gemini", httpStatus, bodyExcerpt)
           const err = Object.assign(
             new Error(`Gemini WebSocket upgrade failed: ${httpStatus}`),
-            { httpStatus, bodyExcerpt, userMessage: mapped.userMessage, actionUrl: mapped.actionUrl },
+            { httpStatus, bodyExcerpt, userMessage: mapped.userMessage, actionUrl: mapped.actionUrl, actionLabel: mapped.actionLabel },
           )
-          finish(err)
           this.sendToClient?.({
             type: "error",
             message: mapped.userMessage,
             code: httpStatus ?? 502,
             userMessage: mapped.userMessage,
             actionUrl: mapped.actionUrl,
+            actionLabel: mapped.actionLabel,
             httpStatus,
           })
+          finish(err)
         })
       }
 
@@ -189,6 +190,7 @@ export class GeminiAdapter implements ProviderAdapter {
             code: parsedStatus ?? 502,
             userMessage: mapped.userMessage,
             actionUrl: mapped.actionUrl,
+            actionLabel: mapped.actionLabel,
             httpStatus: parsedStatus,
           })
         } else {
@@ -266,6 +268,7 @@ export class GeminiAdapter implements ProviderAdapter {
         code: 502,
         userMessage: mapped.userMessage,
         actionUrl: mapped.actionUrl,
+        actionLabel: mapped.actionLabel,
         httpStatus: null,
       })
       return
@@ -279,6 +282,7 @@ export class GeminiAdapter implements ProviderAdapter {
         code: 502,
         userMessage: mapped.userMessage,
         actionUrl: mapped.actionUrl,
+        actionLabel: mapped.actionLabel,
         httpStatus: null,
       })
       return
@@ -304,6 +308,7 @@ export class GeminiAdapter implements ProviderAdapter {
         code: 502,
         userMessage: mapped.userMessage,
         actionUrl: mapped.actionUrl,
+        actionLabel: mapped.actionLabel,
         httpStatus: null,
       })
       return
@@ -377,6 +382,7 @@ export class GeminiAdapter implements ProviderAdapter {
       code: 502,
       userMessage: mapped.userMessage,
       actionUrl: mapped.actionUrl,
+      actionLabel: mapped.actionLabel,
       httpStatus: null,
     })
   }

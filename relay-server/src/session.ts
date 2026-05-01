@@ -677,7 +677,10 @@ export class RelaySession {
     } catch (err) {
       const message = err instanceof Error ? err.message : "adapter connection failed"
       logError(`[session:${this.id}] Adapter error:`, message)
-      this.sendError(message, 500)
+      const alreadyMapped = typeof (err as Record<string, unknown>).userMessage === "string"
+      if (!alreadyMapped) {
+        this.sendError(message, 500)
+      }
       this.ws.close()
     }
   }

@@ -13,6 +13,7 @@ export function AdapterErrorBanner({ error, onDismiss, onNavigateToSettings }: A
   const displayMessage = error.userMessage ?? error.message
   const actionUrl = error.actionUrl ?? null
   const isInAppLink = typeof actionUrl === 'string' && actionUrl.startsWith('voiceclaw://')
+  const buttonLabel = error.actionLabel ?? 'Open billing'
 
   const handleAction = () => {
     if (!actionUrl) return
@@ -39,12 +40,12 @@ export function AdapterErrorBanner({ error, onDismiss, onNavigateToSettings }: A
             {isInAppLink ? (
               <>
                 <Settings size={11} />
-                Open Settings
+                {buttonLabel}
               </>
             ) : (
               <>
                 <ExternalLink size={11} />
-                Open billing
+                {buttonLabel}
               </>
             )}
           </button>

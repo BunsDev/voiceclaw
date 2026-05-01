@@ -48,6 +48,7 @@ export interface AdapterErrorPayload {
   code: number
   userMessage?: string
   actionUrl?: string | null
+  actionLabel?: string
   httpStatus?: number | null
 }
 
@@ -245,6 +246,7 @@ export function useRealtime(callbacks: RealtimeCallbacks): RealtimeControls {
             code: data.code,
             userMessage: data.userMessage,
             actionUrl: data.actionUrl,
+            actionLabel: data.actionLabel,
             httpStatus: data.httpStatus,
           })
           break

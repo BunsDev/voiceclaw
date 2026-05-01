@@ -225,18 +225,19 @@ export class OpenAIAdapter implements ProviderAdapter {
           const mapped = mapAdapterError(this.providerName, httpStatus, bodyExcerpt)
           const err = Object.assign(
             new Error(`Unexpected server response: ${httpStatus}`),
-            { httpStatus, bodyExcerpt, userMessage: mapped.userMessage, actionUrl: mapped.actionUrl },
+            { httpStatus, bodyExcerpt, userMessage: mapped.userMessage, actionUrl: mapped.actionUrl, actionLabel: mapped.actionLabel },
           )
           if (!this.isRotating) {
-            reject(err)
             this.sendToClient?.({
               type: "error",
               message: mapped.userMessage,
               code: httpStatus ?? 502,
               userMessage: mapped.userMessage,
               actionUrl: mapped.actionUrl,
+              actionLabel: mapped.actionLabel,
               httpStatus,
             })
+            reject(err)
           }
         })
       })
@@ -257,6 +258,7 @@ export class OpenAIAdapter implements ProviderAdapter {
             code: 502,
             userMessage: mapped.userMessage,
             actionUrl: mapped.actionUrl,
+            actionLabel: mapped.actionLabel,
             httpStatus: null,
           })
         }
@@ -341,6 +343,7 @@ export class OpenAIAdapter implements ProviderAdapter {
         code: httpStatus ?? 502,
         userMessage: mapped.userMessage,
         actionUrl: mapped.actionUrl,
+        actionLabel: mapped.actionLabel,
         httpStatus,
       })
     } finally {
@@ -545,6 +548,7 @@ export class OpenAIAdapter implements ProviderAdapter {
           code: parsedStatus ?? 502,
           userMessage: mapped.userMessage,
           actionUrl: mapped.actionUrl,
+          actionLabel: mapped.actionLabel,
           httpStatus: parsedStatus,
         })
         break
