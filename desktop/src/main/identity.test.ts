@@ -15,13 +15,15 @@ vi.mock('fs', () => ({
 
 vi.mock('node:fs/promises', () => ({
   mkdir: async () => undefined,
-  readFile: async (path: string) => {
+  readFile: async (path: string, encoding?: string) => {
     if (!fileSystem.has(path)) {
       const err = new Error('ENOENT') as NodeJS.ErrnoException
       err.code = 'ENOENT'
       throw err
     }
-    return fileSystem.get(path) ?? ''
+    const value = fileSystem.get(path) ?? ''
+    if (encoding === 'utf8' || encoding === 'utf-8') return value
+    return Buffer.from(value, 'utf8')
   },
   writeFile: async (path: string, content: string) => {
     writes.push({ path, content })
@@ -32,11 +34,22 @@ vi.mock('node:fs/promises', () => ({
 vi.mock('electron', () => ({
   app: {
     getPath: () => '/tmp/voiceclaw-identity-test',
+    getAppPath: () => '/tmp/voiceclaw-app-path',
+    isPackaged: false,
   },
   net: {
     fetch: () => {
       throw new Error('net.fetch not stubbed in this test')
     },
+  },
+}))
+
+// voice-prefs imports './db' which transitively pulls in better-sqlite3.
+// providerForVoice (the only function we use here) is pure, so stub the
+// db module to keep this test isolated from the native binding.
+vi.mock('./db', () => ({
+  getDb: () => {
+    throw new Error('getDb not stubbed in identity tests')
   },
 }))
 
@@ -120,6 +133,8 @@ describe('getCachedVoicePreview', () => {
     vi.doMock('electron', () => ({
       app: {
         getPath: () => '/tmp/voiceclaw-identity-test',
+        getAppPath: () => '/tmp/voiceclaw-app-path',
+        isPackaged: false,
       },
       net: {
         fetch: async (url: string, init?: RequestInit) => {
@@ -226,5 +241,26 @@ describe('getCachedVoicePreview', () => {
     expect(c.ok).toBe(true)
     // All three resolve with the same payload but only one network call ran.
     expect(fetchCalls).toHaveLength(1)
+  })
+
+  it('serves xAI voices from the bundled WAV without hitting the network', async () => {
+    const wavBytes = 'PRETEND-XAI-WAV-BYTES'
+    fileSystem.set('/tmp/voiceclaw-app-path/resources/voice-previews/xai/eve.wav', wavBytes)
+    const { getCachedVoicePreview } = await import('./identity')
+    const result = await getCachedVoicePreview({ apiKey: null, voice: 'eve' })
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.mimeType).toBe('audio/wav')
+      expect(Buffer.from(result.audioBase64, 'base64').toString('utf8')).toBe(wavBytes)
+    }
+    expect(fetchCalls).toHaveLength(0)
+  })
+
+  it('returns an error when an xAI bundled preview is missing', async () => {
+    const { getCachedVoicePreview } = await import('./identity')
+    const result = await getCachedVoicePreview({ apiKey: null, voice: 'sal' })
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.error).toMatch(/sal/)
+    expect(fetchCalls).toHaveLength(0)
   })
 })

@@ -669,24 +669,22 @@ export function SettingsPage() {
                   >
                     {label}
                   </button>
-                  {isGemini ? (
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        void handleVoicePreview(v)
-                      }}
-                      disabled={isPlaying}
-                      aria-label={`Preview ${v} voice`}
-                      title={isPlaying ? 'Playing…' : `Preview ${label}`}
-                      className={`flex w-9 items-center justify-center rounded-r-md border-l border-input
-                        text-muted-foreground transition-colors hover:bg-background hover:text-foreground
-                        disabled:opacity-50 disabled:cursor-not-allowed
-                      `}
-                    >
-                      <Play size={14} className={isPlaying ? 'animate-pulse' : ''} />
-                    </button>
-                  ) : null}
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      void handleVoicePreview(v)
+                    }}
+                    disabled={isPlaying}
+                    aria-label={`Preview ${v} voice`}
+                    title={isPlaying ? 'Playing…' : `Preview ${label}`}
+                    className={`flex w-9 items-center justify-center rounded-r-md border-l border-input
+                      text-muted-foreground transition-colors hover:bg-background hover:text-foreground
+                      disabled:opacity-50 disabled:cursor-not-allowed
+                    `}
+                  >
+                    <Play size={14} className={isPlaying ? 'animate-pulse' : ''} />
+                  </button>
                 </div>
               )
             })}

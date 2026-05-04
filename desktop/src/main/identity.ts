@@ -2,6 +2,7 @@ import { app, net } from 'electron'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'path'
+import { providerForVoice } from './voice-prefs'
 
 export type AgentIdentity = {
   name: string
@@ -67,14 +68,16 @@ export type VoicePreviewResult =
 // the same file.
 const inFlightVoicePreviews = new Map<string, Promise<VoicePreviewResult>>()
 
-// Returns a cached preview clip for `voice`, generating + persisting it on
-// first request. Once cached, subsequent calls do NOT hit the Gemini TTS
-// endpoint, so this is safe to call without a configured API key after the
-// initial generation.
+// Returns a cached preview clip for `voice`. xAI voices read from a
+// bundled WAV under `resources/voice-previews/xai/` (no network, no key
+// required). Gemini voices generate via the TTS HTTP endpoint on first
+// request and persist to userData; subsequent clicks reuse the cache.
 export async function getCachedVoicePreview(params: {
   apiKey?: string | null
   voice: string
 }): Promise<VoicePreviewResult> {
+  const provider = providerForVoice(params.voice)
+  if (provider === 'xai') return readBundledXaiVoicePreview(params.voice)
   const cached = await readVoicePreviewCache(params.voice)
   if (cached) return { ok: true, ...cached }
   const existing = inFlightVoicePreviews.get(params.voice)
@@ -210,5 +213,37 @@ async function writeVoicePreviewCache(
     await writeFile(getVoicePreviewCachePath(voice), JSON.stringify(payload), 'utf8')
   } catch (err) {
     console.warn('[voice-preview] cache write failed', err)
+  }
+}
+
+function getBundledXaiVoicePath(voice: string): string {
+  // Voice IDs are lowercase ASCII; defensively strip anything that could
+  // escape the resources dir.
+  const safe = voice.replace(/[^a-zA-Z0-9_-]/g, '_')
+  const file = `${safe}.wav`
+  // In packaged builds extraResources lands at process.resourcesPath; in
+  // dev electron-vite serves from desktop/, so resources sit alongside.
+  if (app.isPackaged) {
+    return join(process.resourcesPath, 'voice-previews', 'xai', file)
+  }
+  return join(app.getAppPath(), 'resources', 'voice-previews', 'xai', file)
+}
+
+async function readBundledXaiVoicePreview(voice: string): Promise<VoicePreviewResult> {
+  try {
+    const buf = await readFile(getBundledXaiVoicePath(voice))
+    return {
+      ok: true,
+      audioBase64: buf.toString('base64'),
+      mimeType: 'audio/wav',
+    }
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') {
+      return { ok: false, error: `No bundled preview for voice "${voice}".` }
+    }
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : 'Failed to read voice preview.',
+    }
   }
 }
