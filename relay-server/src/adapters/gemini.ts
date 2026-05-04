@@ -82,6 +82,12 @@ export class GeminiAdapter implements ProviderAdapter {
   private pendingAudio: string[] = []
   private pendingVideo: string[] = []
   private pendingControl: string[] = []
+  // Set when the previous upstream closed with 1007 (invalid argument). The
+  // queued audio captured before that close is the most likely culprit, so
+  // replaying it into the resumed session re-trips 1007 and locks us into a
+  // reconnect loop. Control messages still flush — the model needs them to
+  // stay coherent.
+  private dropPendingAudioOnFlush = false
 
   // Per-turn latency marks, emitted on turnComplete. Gemini Live has no
   // explicit "end-of-speech" event — we proxy it via the last inputTranscription
@@ -287,6 +293,8 @@ export class GeminiAdapter implements ProviderAdapter {
       })
       return
     }
+
+    if (code === 1007) this.dropPendingAudioOnFlush = true
 
     void this.reconnect(`close code ${code}`)
   }
@@ -831,20 +839,26 @@ export class GeminiAdapter implements ProviderAdapter {
     const control = this.pendingControl
     const audio = this.pendingAudio
     const video = this.pendingVideo
+    const dropAudio = this.dropPendingAudioOnFlush
     this.pendingControl = []
     this.pendingAudio = []
     // Drop video frames — they are stale by the time we reconnect and sending
     // them can trigger a 1007 (invalid argument) from Gemini. The client
     // refreshes screen-share frames within ~1 s anyway.
     this.pendingVideo = []
-    if (control.length > 0 || audio.length > 0) {
-      log(`[gemini] Flushing reconnect queue (${control.length} control, ${audio.length} audio)`)
+    this.dropPendingAudioOnFlush = false
+    const audioToSend = dropAudio ? [] : audio
+    if (control.length > 0 || audioToSend.length > 0) {
+      log(`[gemini] Flushing reconnect queue (${control.length} control, ${audioToSend.length} audio)`)
+    }
+    if (dropAudio && audio.length > 0) {
+      log(`[gemini] Dropping ${audio.length} stale audio chunk(s) from reconnect queue (prior close was 1007)`)
     }
     if (video.length > 0) {
       log(`[gemini] Dropping ${video.length} stale video frame(s) from reconnect queue`)
     }
     for (const p of control) this.upstream.send(p)
-    for (const p of audio) this.upstream.send(p)
+    for (const p of audioToSend) this.upstream.send(p)
   }
 
   private armPostResumeListener() {

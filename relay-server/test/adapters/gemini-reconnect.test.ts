@@ -327,6 +327,51 @@ describe("GeminiAdapter reconnect", () => {
       expect(eventsOfType(mock.events, "error")).toHaveLength(0)
     })
 
+    it("drops the audio queue when the prior close was 1007, but still flushes control", async () => {
+      mock = await mountMockGemini([
+        { steps: [
+          { at: 20, msg: { sessionResumptionUpdate: { newHandle: "h1", resumable: true } } },
+          { at: 60, close: 1007, reason: "Request contains an invalid argument." },
+        ] },
+        { ackSetup: 150, steps: [] },
+      ])
+
+      await waitMs(80)
+      for (let i = 0; i < 8; i++) mock.adapter.sendAudio(pcm16Chunk(960, i))
+      mock.adapter.sendToolResult("call-after-1007", JSON.stringify({ ok: true }))
+
+      await waitMs(1500)
+
+      const onSocket2 = mock.messagesPerSocket[1] ?? []
+      const audio = onSocket2.filter((m) => "realtimeInput" in m)
+      const tools = onSocket2.filter((m) => "toolResponse" in m)
+      expect(audio).toHaveLength(0)
+      expect(tools).toHaveLength(1)
+      expect(eventsOfType(mock.events, "session.rotated")).toHaveLength(1)
+      expect(eventsOfType(mock.events, "error")).toHaveLength(0)
+    })
+
+    it("still flushes the audio queue when the prior close was 1011 (transient server error)", async () => {
+      mock = await mountMockGemini([
+        { steps: [
+          { at: 20, msg: { sessionResumptionUpdate: { newHandle: "h1", resumable: true } } },
+          { at: 60, close: 1011, reason: "internal error" },
+        ] },
+        { ackSetup: 150, steps: [] },
+      ])
+
+      await waitMs(80)
+      for (let i = 0; i < 8; i++) mock.adapter.sendAudio(pcm16Chunk(960, i))
+
+      await waitMs(1500)
+
+      const onSocket2 = mock.messagesPerSocket[1] ?? []
+      const audio = onSocket2.filter((m) => "realtimeInput" in m)
+      expect(audio).toHaveLength(8)
+      expect(eventsOfType(mock.events, "session.rotated")).toHaveLength(1)
+      expect(eventsOfType(mock.events, "error")).toHaveLength(0)
+    })
+
     it("drops newest control messages once the queue is full, preserving originals", async () => {
       mock = await mountMockGemini([
         { steps: [
