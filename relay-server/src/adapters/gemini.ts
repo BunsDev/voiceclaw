@@ -82,9 +82,10 @@ export class GeminiAdapter implements ProviderAdapter {
   private pendingAudio: string[] = []
   private pendingVideo: string[] = []
   private pendingControl: string[] = []
-  // Set when the previous upstream closed with 1007 (invalid argument). The
-  // queued audio captured before that close is the most likely culprit, so
-  // replaying it into the resumed session re-trips 1007 and locks us into a
+  // Set when the previous upstream closed with 1007 (invalid argument). Audio
+  // is only queued while isReconnecting is true, so the chunks captured during
+  // that reconnect window are continuous with whatever payload tripped 1007 —
+  // replaying them into the resumed session re-trips 1007 and locks us into a
   // reconnect loop. Control messages still flush — the model needs them to
   // stay coherent.
   private dropPendingAudioOnFlush = false
