@@ -361,6 +361,16 @@ export function registerIpcHandlers() {
   })
 
   ipcMain.handle('attachments:pickImage', async () => {
+    // Grok Voice has no visual modality. The renderer disables the
+    // attach button on this provider, but we re-check here so a future
+    // UI bug can't silently send an image the adapter won't relay.
+    if (getActiveProvider() === 'xai') {
+      return {
+        ok: false as const,
+        error:
+          'Image attachments are only available with Gemini Live. Grok Voice does not support image input.',
+      }
+    }
     const window = getMainWindow()
     const result = window
       ? await dialog.showOpenDialog(window, {

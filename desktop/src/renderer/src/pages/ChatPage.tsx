@@ -639,6 +639,13 @@ export function ChatPage({ onNavigateToSettings }: ChatPageProps = {}) {
       ? 'Screen sharing is only available with Gemini Live. Grok Voice does not support video input.'
       : 'Share screen'
 
+  // Image attachments depend on the active model accepting visual input.
+  // Grok Voice is audio-only — surface that as a tooltip rather than
+  // letting the user attach an image the model will silently ignore.
+  const attachDisabledReason = activeRealtimeModel.startsWith('grok-voice-')
+    ? 'Image attachments are only available with Gemini Live. Grok Voice does not support image input.'
+    : undefined
+
   const timelineItems = useMemo(
     () => buildTimeline(messages, toolCalls),
     [messages, toolCalls],
@@ -647,6 +654,10 @@ export function ChatPage({ onNavigateToSettings }: ChatPageProps = {}) {
   const ingestFiles = useCallback(async (files: File[] | FileList) => {
     const list = Array.from(files)
     if (list.length === 0) return
+    if (attachDisabledReason) {
+      setAttachmentError(attachDisabledReason)
+      return
+    }
     const accepted: PendingAttachment[] = []
     const errors: string[] = []
     for (const file of list) {
@@ -659,7 +670,7 @@ export function ChatPage({ onNavigateToSettings }: ChatPageProps = {}) {
       setAttachmentError(null)
     }
     if (errors.length > 0) setAttachmentError(errors.join('  '))
-  }, [])
+  }, [attachDisabledReason])
 
   const handlePickImage = useCallback(async () => {
     const result = await pickImageAttachment()
@@ -690,6 +701,14 @@ export function ChatPage({ onNavigateToSettings }: ChatPageProps = {}) {
 
   const handleSendAttachments = useCallback(async () => {
     if (pendingAttachments.length === 0) return
+    // Catches the case where attachments were queued (via picker, drop,
+    // or paste) and the user then switched to a model that can't accept
+    // them before clicking send.
+    if (attachDisabledReason) {
+      setAttachmentError(attachDisabledReason)
+      setPendingAttachments([])
+      return
+    }
     setSendingAttachments(true)
     try {
       const convId = await ensureConversation()
@@ -727,7 +746,7 @@ export function ChatPage({ onNavigateToSettings }: ChatPageProps = {}) {
     } finally {
       setSendingAttachments(false)
     }
-  }, [pendingAttachments, isCallActive, realtime])
+  }, [pendingAttachments, isCallActive, realtime, attachDisabledReason])
 
   const handleDragEnter = useCallback((e: DragEvent<HTMLDivElement>) => {
     if (!hasFilePayload(e)) return
@@ -958,6 +977,7 @@ export function ChatPage({ onNavigateToSettings }: ChatPageProps = {}) {
       <ChatComposer
         onSubmit={handleComposerSubmit}
         onAttach={handlePickImage}
+        attachDisabledReason={attachDisabledReason}
       />
 
       {/* Call controls */}

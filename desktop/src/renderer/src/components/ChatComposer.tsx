@@ -17,11 +17,21 @@ import {
 export interface ChatComposerProps {
   onSubmit: (text: string) => void
   onAttach?: () => void
+  // When set, the attach button stays visible but is disabled and the
+  // string becomes its tooltip (used to gate image attachments on
+  // models that don't accept visual input — see ChatPage).
+  attachDisabledReason?: string
   disabled?: boolean
   placeholder?: string
 }
 
-export function ChatComposer({ onSubmit, onAttach, disabled, placeholder }: ChatComposerProps) {
+export function ChatComposer({
+  onSubmit,
+  onAttach,
+  attachDisabledReason,
+  disabled,
+  placeholder,
+}: ChatComposerProps) {
   const [value, setValue] = useState('')
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
@@ -61,16 +71,28 @@ export function ChatComposer({ onSubmit, onAttach, disabled, placeholder }: Chat
     <div className="px-4 py-3 border-t border-border bg-background/80 backdrop-blur">
       <div className="flex items-end gap-2">
         {onAttach && (
-          <Button
-            variant="default"
-            size="icon"
-            onClick={onAttach}
-            disabled={disabled}
-            aria-label="Attach an image"
-            title="Attach an image (PNG, JPG, WEBP, ≤10MB)"
+          // Wrap in a span so the tooltip still shows when the button
+          // is disabled (most browsers suppress title on disabled
+          // controls).
+          <span
+            title={
+              attachDisabledReason
+                ? attachDisabledReason
+                : 'Attach an image (PNG, JPG, WEBP, ≤10MB)'
+            }
+            className="inline-flex"
           >
-            <Paperclip size={18} />
-          </Button>
+            <Button
+              variant="default"
+              size="icon"
+              onClick={onAttach}
+              disabled={disabled || Boolean(attachDisabledReason)}
+              aria-label="Attach an image"
+              aria-disabled={Boolean(attachDisabledReason) || undefined}
+            >
+              <Paperclip size={18} />
+            </Button>
+          </span>
         )}
         <textarea
           ref={textareaRef}
