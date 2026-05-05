@@ -89,8 +89,8 @@ const SUMMARY_PROMPT = [
   "- <fact or decision>",
 ].join(" ")
 
-const OPENAI_SUMMARY_MODEL = "gpt-4o-mini"
 const GEMINI_SUMMARY_MODEL = "gemini-2.5-flash"
+const XAI_SUMMARY_MODEL = "grok-3-mini"
 const SUMMARY_TIMEOUT_MS = 8_000
 
 async function summarize(
@@ -101,9 +101,9 @@ async function summarize(
     .map((m) => `${m.role === "user" ? "User" : "Assistant"}: ${m.text}`)
     .join("\n")
 
-  const order: Summarizer[] = provider === "gemini"
-    ? [summarizeWithGemini, summarizeWithOpenAI]
-    : [summarizeWithOpenAI]
+  const order: Summarizer[] = provider === "xai"
+    ? [summarizeWithXai]
+    : [summarizeWithGemini]
 
   for (const fn of order) {
     try {
@@ -149,13 +149,13 @@ async function summarizeWithGemini(transcript: string): Promise<string | null> {
   return text || null
 }
 
-async function summarizeWithOpenAI(transcript: string): Promise<string | null> {
-  const apiKey = process.env.OPENAI_API_KEY
+async function summarizeWithXai(transcript: string): Promise<string | null> {
+  const apiKey = process.env.XAI_API_KEY
   if (!apiKey) return null
 
-  const url = "https://api.openai.com/v1/chat/completions"
+  const url = "https://api.x.ai/v1/chat/completions"
   const body = {
-    model: OPENAI_SUMMARY_MODEL,
+    model: XAI_SUMMARY_MODEL,
     messages: [
       { role: "system", content: SUMMARY_PROMPT },
       { role: "user", content: transcript },
@@ -174,7 +174,7 @@ async function summarizeWithOpenAI(transcript: string): Promise<string | null> {
   })
 
   if (!res.ok) {
-    throw new Error(`OpenAI summary HTTP ${res.status}`)
+    throw new Error(`xAI summary HTTP ${res.status}`)
   }
 
   const data = await res.json() as {

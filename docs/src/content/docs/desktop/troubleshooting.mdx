@@ -33,7 +33,7 @@ If our team asks for more detail, you can export a bundle with one click:
 | Database schema | Table definitions only — no messages or history |
 | List of configured providers | Provider names only — no key values |
 | Service health snapshot | Relay and OpenClaw status at export time |
-| Brain doctor report | PASS/FAIL checklist for the 10 brain health checks |
+| Brain doctor report | PASS/FAIL checklist for the 11 brain health checks |
 
 ### What's never included
 
@@ -60,7 +60,7 @@ The gateway responded but returned no content. Expand the detail panel in the ch
 
 ### Run brain diagnostic
 
-VoiceClaw has a built-in 10-point diagnostic for brain problems. You don't need a terminal or developer tools to use it:
+VoiceClaw has a built-in 11-point diagnostic for brain problems. You don't need a terminal or developer tools to use it:
 
 1. Open **Settings → Debug**.
 2. Click **Run** next to "Run brain diagnostic".
@@ -70,7 +70,7 @@ VoiceClaw has a built-in 10-point diagnostic for brain problems. You don't need 
 
 Clicking **Run** again after fixing something re-runs all checks so you can confirm the fix worked.
 
-The 12 checks are:
+The 11 checks are:
 
 1. Bundled openclaw script exists
 2. Bundled node binary exists and is v22.12+
@@ -83,7 +83,6 @@ The 12 checks are:
 9. Direct call to openclaw's completions endpoint returns a non-empty response
 10. Gemini API key is accepted by Google's API
 11. xAI API key is reachable (skipped if no xAI key is configured)
-12. OpenAI API key is reachable (skipped if no OpenAI key is configured)
 
 The same diagnostic runs automatically as part of the diagnostic bundle (see above) and is saved as `brain-doctor.json`.
 
@@ -109,10 +108,6 @@ When the realtime voice connection fails because of an upstream provider problem
 | xAI account out of credits or hit spending limit | Account balance is $0 | Click **Open billing** → add credits at console.x.ai/team |
 | xAI rejected this request | Key lacks permission for this model | Click **Open billing** → review key permissions at console.x.ai |
 | xAI service is having issues | xAI-side outage | Click **Open billing** → check status.x.ai; try again later |
-| OpenAI API key invalid or revoked | Key was deleted or rotated | Click **Open Settings** → re-enter the key under Settings → Provider |
-| OpenAI quota exceeded | Free-tier limit reached | Click **Open billing** → add a payment method at platform.openai.com/account/billing |
-| OpenAI rate limit | Too many requests | Wait a moment and start a new call |
-| OpenAI service is having issues | OpenAI-side outage | Check status.openai.com; try again later |
 | Gemini API key invalid | Key was deleted or rotated | Click **Open Settings** → re-enter the key under Settings → Provider |
 | Gemini quota exceeded | Daily quota hit | Click **Open billing** → upgrade at aistudio.google.com/app/billing |
 | Gemini service is having issues | Google-side outage | Check status.cloud.google.com; try again later |
@@ -122,7 +117,7 @@ The banner stays visible for the rest of the session so you can confirm the fix 
 
 ### Brain diagnostic also checks provider keys
 
-The **Run brain diagnostic** tool (Settings → Debug) runs 12 checks, including reachability tests for your configured xAI and OpenAI keys (checks 11–12). If a key is invalid or your quota is exhausted, the diagnostic will flag the failing check and show the same hint as the runtime banner.
+The **Run brain diagnostic** tool (Settings → Debug) runs 11 checks, including a reachability test for your configured xAI key (check 11). If a key is invalid or your quota is exhausted, the diagnostic will flag the failing check and show the same hint as the runtime banner.
 
 ## Common problems
 

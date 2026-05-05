@@ -501,39 +501,6 @@ async function checkXaiApiKey(acc: Acc): Promise<void> {
   }
 }
 
-async function checkOpenAiApiKey(acc: Acc): Promise<void> {
-  const apiKey = getProviderKey('openai')
-  if (!apiKey) {
-    skip(acc, 'OpenAI API key reachability', 'skipped (no OpenAI key configured)')
-    return
-  }
-  try {
-    const res = await safeFetch(
-      'https://api.openai.com/v1/models',
-      { headers: { Authorization: `Bearer ${apiKey}` } },
-      10_000,
-    )
-    const text = await res.text()
-    if (res.ok) {
-      pass(acc, 'OpenAI API key reachability', `HTTP ${res.status}`)
-    } else {
-      let hint = 'Check your OpenAI API key in VoiceClaw Settings → Provider tab'
-      if (res.status === 401) hint = 'API key invalid or revoked. Re-enter it in Settings → Provider'
-      if (res.status === 402 || (res.status === 429 && text.includes('insufficient_quota')))
-        hint = 'OpenAI quota exceeded. Top up at https://platform.openai.com/account/billing'
-      if (res.status === 429 && !text.includes('insufficient_quota'))
-        hint = 'OpenAI rate limit hit. Try again in a moment'
-      fail(acc, 'OpenAI API key reachability', `HTTP ${res.status}: ${text.substring(0, 200)}`, hint)
-    }
-  } catch (err) {
-    fail(
-      acc,
-      'OpenAI API key reachability',
-      `fetch failed: ${(err as Error).message}`,
-      'Check internet connectivity; if behind a VPN/proxy, try disabling it',
-    )
-  }
-}
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -557,7 +524,6 @@ export async function runAllChecks(): Promise<DoctorResult> {
   await checkOpenclawCompletions(acc, openclawPort, configPath)
   await checkGeminiApiKey(acc, configPath)
   await checkXaiApiKey(acc)
-  await checkOpenAiApiKey(acc)
 
   return {
     checks: acc,
