@@ -639,6 +639,13 @@ export function ChatPage({ onNavigateToSettings }: ChatPageProps = {}) {
       ? 'Screen sharing is only available with Gemini Live. Grok Voice does not support video input.'
       : 'Share screen'
 
+  // Image attachments depend on the active model accepting visual input.
+  // Grok Voice is audio-only — surface that as a tooltip rather than
+  // letting the user attach an image the model will silently ignore.
+  const attachDisabledReason = activeRealtimeModel.startsWith('grok-voice-')
+    ? 'Image attachments are only available with Gemini Live. Grok Voice does not support image input.'
+    : undefined
+
   const timelineItems = useMemo(
     () => buildTimeline(messages, toolCalls),
     [messages, toolCalls],
@@ -958,6 +965,7 @@ export function ChatPage({ onNavigateToSettings }: ChatPageProps = {}) {
       <ChatComposer
         onSubmit={handleComposerSubmit}
         onAttach={handlePickImage}
+        attachDisabledReason={attachDisabledReason}
       />
 
       {/* Call controls */}
