@@ -1,4 +1,9 @@
-// OpenAI Realtime adapter — translates relay protocol ↔ OpenAI Realtime WebSocket events
+// OpenAI Realtime adapter — translates relay protocol ↔ OpenAI Realtime GA events.
+// Wire format follows the GA (v2) spec: nested `audio` config, `output_modalities`,
+// session `type: "realtime"`, no `OpenAI-Beta` header. Event names follow GA
+// (`response.output_audio.*`, `response.output_audio_transcript.*`); legacy beta
+// names are still accepted for the xAI subclass which speaks the OpenAI-compatible
+// beta dialect.
 
 import WebSocket from "ws"
 import type { IncomingMessage } from "node:http"
@@ -11,8 +16,9 @@ import { log, error as logError } from "../log.js"
 import { mapAdapterError } from "./error-map.js"
 
 const OPENAI_REALTIME_URL = "wss://api.openai.com/v1/realtime"
-const DEFAULT_MODEL = "gpt-realtime-mini"
+const DEFAULT_MODEL = "gpt-realtime-2"
 const DEFAULT_VOICE = "marin"
+const DEFAULT_TRANSCRIPTION_MODEL = "gpt-4o-mini-transcribe"
 
 export interface OpenAICompatibleAdapterOptions {
   providerName?: string
@@ -43,6 +49,11 @@ export class OpenAIAdapter implements ProviderAdapter {
   private rotationTimer: ReturnType<typeof setTimeout> | null = null
   private watchdogTimer: ReturnType<typeof setTimeout> | null = null
   private isRotating = false
+  // Set when WE initiate disconnect/rotation. Suppresses the close-handler's
+  // error path so the user doesn't see a red "Connection closed unexpectedly"
+  // banner when they intentionally hang up — `ws.close()` without an explicit
+  // code surfaces as 1005 (no-status), which would otherwise look like a fault.
+  private isClosing = false
   private isResponseActive = false
   private pendingResponseCancel = false
   private pendingResponseCreate = false
@@ -73,7 +84,7 @@ export class OpenAIAdapter implements ProviderAdapter {
     this.apiKeyEnv = options.apiKeyEnv ?? "OPENAI_API_KEY"
     this.defaultModel = options.defaultModel ?? DEFAULT_MODEL
     this.defaultVoice = options.defaultVoice ?? DEFAULT_VOICE
-    this.authHeaders = options.authHeaders ?? { "OpenAI-Beta": "realtime=v1" }
+    this.authHeaders = options.authHeaders ?? {}
     this.sessionFormat = options.sessionFormat ?? "openai"
   }
 
@@ -104,8 +115,23 @@ export class OpenAIAdapter implements ProviderAdapter {
     this.resetWatchdog()
   }
 
-  sendFrame(_data: string, _mimeType?: string) {
-    // OpenAI Realtime does not support video input
+  sendFrame(data: string, mimeType?: string) {
+    // GA added image input via `input_image` content items. xAI's beta
+    // dialect doesn't speak this shape, so the xAI subclass keeps the
+    // legacy no-op behavior by overriding this method.
+    if (this.sessionFormat !== "openai") return
+    const mt = mimeType || "image/jpeg"
+    log(`[${this.providerName}] Injecting image via conversation.item.create (${data.length} b64 chars, ${mt})`)
+    this.sendUpstream({
+      type: "conversation.item.create",
+      item: {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_image", image_url: `data:${mt};base64,${data}` }],
+      },
+    })
+    // Don't fire response.create here — the caller decides when to ask
+    // the model to speak (typically after a sibling text.input arrives).
   }
 
   injectContext(text: string) {
@@ -148,13 +174,16 @@ export class OpenAIAdapter implements ProviderAdapter {
         output,
       },
     })
+    // The function_call lives inside the current response; in GA, queuing
+    // its output doesn't stop the response and we must NOT send
+    // response.cancel — that would cut the model's still-streaming audio
+    // mid-sentence (and on async tools like ask_brain the relay sends a
+    // "searching…" placeholder right after the call lands, so this race is
+    // common). Just queue the next response.create; flushPendingResponseCreate
+    // fires it after response.done lands naturally.
     if (this.isResponseActive) {
-      log(`[${this.providerName}] Tool result (${callId}) arrived mid-response, canceling current response before continuing`)
+      log(`[${this.providerName}] Tool result (${callId}) queued; will fire response.create after response.done`)
       this.pendingResponseCreate = true
-      if (!this.pendingResponseCancel) {
-        this.pendingResponseCancel = true
-        this.sendUpstream({ type: "response.cancel" })
-      }
     } else {
       this.requestResponse(`tool:${callId}`)
     }
@@ -176,9 +205,10 @@ export class OpenAIAdapter implements ProviderAdapter {
   }
 
   disconnect() {
+    this.isClosing = true
     this.clearTimers()
     if (this.upstream && this.upstream.readyState !== WebSocket.CLOSED) {
-      this.upstream.close()
+      this.upstream.close(1000, "client disconnected")
     }
     this.upstream = null
     this.sendToClient = null
@@ -188,6 +218,7 @@ export class OpenAIAdapter implements ProviderAdapter {
     const apiKey = process.env[this.apiKeyEnv]
     if (!apiKey) throw new Error(`${this.providerName} API key not configured`)
 
+    this.isClosing = false
     this.resetResponseState()
 
     const model = config.model || this.defaultModel
@@ -250,7 +281,11 @@ export class OpenAIAdapter implements ProviderAdapter {
       this.upstream.on("close", (code, reason) => {
         const reasonText = reason instanceof Buffer ? reason.toString("utf8") : String(reason)
         log(`[${this.providerName}] Upstream closed: ${code} ${reasonText}`)
-        if (!this.isRotating && code !== 1000) {
+        // Treat 1000 (normal) and 1005 (no-status — our own ws.close()
+        // round-tripped) as clean. Anything else, only when we did not
+        // initiate the close ourselves, gets surfaced to the client.
+        const isCleanCode = code === 1000 || code === 1005
+        if (!this.isRotating && !this.isClosing && !isCleanCode) {
           const mapped = mapAdapterError(this.providerName, null, reasonText || null)
           this.sendToClient?.({
             type: "error",
@@ -436,9 +471,14 @@ export class OpenAIAdapter implements ProviderAdapter {
         this.resetWatchdog()
         break
 
-      // Transcripts
+      // Transcripts (audio modality) and text-only output. GA emits
+      // response.output_text.* when the model replies in text — we treat
+      // those identically to audio transcripts so downstream sees a
+      // single "assistant said this" stream regardless of modality.
       case "response.audio_transcript.delta":
       case "response.output_audio_transcript.delta":
+      case "response.text.delta":
+      case "response.output_text.delta":
         if (this.firstTextDeltaAtMs == null) {
           this.firstTextDeltaAtMs = Date.now()
         }
@@ -450,13 +490,17 @@ export class OpenAIAdapter implements ProviderAdapter {
         break
       case "response.audio_transcript.done":
       case "response.output_audio_transcript.done":
-        this.transcript.push({ role: "assistant", text: event.transcript })
+      case "response.text.done":
+      case "response.output_text.done": {
+        const finalText = event.transcript ?? event.text ?? ""
+        if (finalText) this.transcript.push({ role: "assistant", text: finalText })
         this.sendToClient?.({
           type: "transcript.done",
-          text: event.transcript,
+          text: finalText,
           role: "assistant",
         })
         break
+      }
 
       // User speech transcription (streaming deltas)
       case "conversation.item.input_audio_transcription.delta":
@@ -565,8 +609,6 @@ export class OpenAIAdapter implements ProviderAdapter {
             event.type !== "input_audio_buffer.committed" &&
             event.type !== "input_audio_buffer.cleared" &&
             event.type !== "conversation.item.created" &&
-            event.type !== "response.text.delta" &&
-            event.type !== "response.text.done" &&
             event.type !== "response.audio.done" &&
             event.type !== "response.output_audio.done" &&
             event.type !== "response.function_call_arguments.delta") {
@@ -708,22 +750,23 @@ export class OpenAIAdapter implements ProviderAdapter {
     instructions: string,
     tools: ReturnType<typeof getTools>,
   ): Record<string, unknown> {
-    const common = {
-      instructions,
-      voice: config.voice || this.defaultVoice,
-      turn_detection: {
-        type: "server_vad",
-        threshold: 0.5,
-        prefix_padding_ms: 300,
-        silence_duration_ms: 800,
-      },
-      tools,
-      tool_choice: tools.length > 0 ? "auto" : "none",
+    const voice = config.voice || this.defaultVoice
+    const model = config.model || this.defaultModel
+    const turnDetection = {
+      type: "server_vad",
+      threshold: 0.5,
+      prefix_padding_ms: 300,
+      silence_duration_ms: 800,
     }
+    const toolChoice = tools.length > 0 ? "auto" : "none"
 
     if (this.sessionFormat === "xai") {
       return {
-        ...common,
+        instructions,
+        voice,
+        turn_detection: turnDetection,
+        tools,
+        tool_choice: toolChoice,
         audio: {
           input: { format: { type: "audio/pcm", rate: 24000 } },
           output: { format: { type: "audio/pcm", rate: 24000 } },
@@ -732,14 +775,23 @@ export class OpenAIAdapter implements ProviderAdapter {
     }
 
     return {
-      ...common,
-      modalities: ["text", "audio"],
-      input_audio_format: "pcm16",
-      output_audio_format: "pcm16",
-      input_audio_transcription: {
-        model: "gpt-4o-mini-transcribe",
+      type: "realtime",
+      model,
+      instructions,
+      output_modalities: ["audio"],
+      audio: {
+        input: {
+          format: { type: "audio/pcm", rate: 24000 },
+          turn_detection: turnDetection,
+          transcription: { model: DEFAULT_TRANSCRIPTION_MODEL },
+        },
+        output: {
+          format: { type: "audio/pcm", rate: 24000 },
+          voice,
+        },
       },
-      temperature: 0.8,
+      tools,
+      tool_choice: toolChoice,
     }
   }
 }

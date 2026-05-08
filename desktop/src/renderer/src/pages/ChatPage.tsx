@@ -78,7 +78,12 @@ import { groupMessages } from '../lib/message-grouping'
 import { streamTextChat } from '../lib/text-chat'
 
 const DEFAULT_REALTIME_MODEL = 'gemini-3.1-flash-live-preview'
-const REALTIME_MODELS = ['gemini-3.1-flash-live-preview', 'grok-voice-think-fast-1.0'] as const
+const REALTIME_MODELS = [
+  'gemini-3.1-flash-live-preview',
+  'grok-voice-think-fast-1.0',
+  'gpt-realtime-2',
+  'gpt-realtime-mini',
+] as const
 
 interface ChatPageProps {
   onNavigateToSettings?: () => void
@@ -517,6 +522,13 @@ export function ChatPage({ onNavigateToSettings }: ChatPageProps = {}) {
     }
   }, [toggleMute, endCall])
 
+  // Image attachments depend on the active model accepting visual input.
+  // Grok Voice is audio-only — surface that as a tooltip rather than
+  // letting the user attach an image the model will silently ignore.
+  const attachDisabledReason = activeRealtimeModel.startsWith('grok-voice-')
+    ? 'Image attachments are only available with Gemini Live. Grok Voice does not support image input.'
+    : undefined
+
   const handleComposerSubmit = useCallback(async (text: string) => {
     if (textChatCancelRef.current) {
       textChatCancelRef.current()
@@ -525,12 +537,35 @@ export function ChatPage({ onNavigateToSettings }: ChatPageProps = {}) {
       setIsThinking(false)
     }
     const convId = await ensureConversation()
+    // Snapshot + clear any pending image attachments at submit time so they
+    // ride along with this turn rather than appearing as a separate
+    // "Attached: …" placeholder. Persist them onto the same user message so
+    // the chat history shows the image inline next to the text.
+    const attachmentsToSend = pendingAttachments
+    if (attachmentsToSend.length > 0 && attachDisabledReason) {
+      setAttachmentError(attachDisabledReason)
+      setPendingAttachments([])
+      return
+    }
     const persisted = await addMessage(convId, 'user', text)
     setTypedMessageIds((prev) => {
       const next = new Set(prev)
       next.add(persisted.id)
       return next
     })
+    if (attachmentsToSend.length > 0) {
+      const newAttachments: Attachment[] = []
+      const failures: string[] = []
+      for (const pending of attachmentsToSend) {
+        const result = await attachToMessage(persisted.id, pendingToAttachmentInput(pending))
+        if (result.ok) newAttachments.push(result.attachment)
+        else failures.push(`${pending.originalName ?? 'attachment'}: ${result.error}`)
+      }
+      setAttachments((prev) => [...prev, ...newAttachments])
+      setPendingAttachments([])
+      if (failures.length > 0) setAttachmentError(failures.join('  '))
+      else setAttachmentError(null)
+    }
     await loadMessages()
 
     if (!titleGeneratedRef.current) {
@@ -542,6 +577,12 @@ export function ChatPage({ onNavigateToSettings }: ChatPageProps = {}) {
     }
 
     if (realtimeRef.current?.isConnected) {
+      // Active call — push images first so they're in the conversation
+      // before the text turn triggers a response.
+      for (const pending of attachmentsToSend) {
+        try { realtimeRef.current.sendFrame(pending.base64, pending.mime) }
+        catch (err) { console.warn('[ChatPage] sendFrame failed:', err) }
+      }
       const ok = realtimeRef.current.sendUserText(text)
       if (!ok) console.warn('[ChatPage] sendUserText failed — websocket not open')
       return
@@ -587,6 +628,9 @@ export function ChatPage({ onNavigateToSettings }: ChatPageProps = {}) {
         locale: navigator.language,
         deviceModel: 'Desktop (Electron)',
       },
+      images: attachmentsToSend.length > 0
+        ? attachmentsToSend.map((p) => ({ base64: p.base64, mimeType: p.mime }))
+        : undefined,
     }, {
       onToken: (full) => {
         setIsThinking(false)
@@ -609,7 +653,7 @@ export function ChatPage({ onNavigateToSettings }: ChatPageProps = {}) {
         await loadMessages()
       },
     })
-  }, [loadMessages])
+  }, [loadMessages, pendingAttachments, attachDisabledReason])
 
   useEffect(() => {
     return () => {
@@ -816,13 +860,6 @@ export function ChatPage({ onNavigateToSettings }: ChatPageProps = {}) {
       ? 'Screen sharing is only available with Gemini Live. Grok Voice does not support video input.'
       : 'Share screen'
 
-  // Image attachments depend on the active model accepting visual input.
-  // Grok Voice is audio-only — surface that as a tooltip rather than
-  // letting the user attach an image the model will silently ignore.
-  const attachDisabledReason = activeRealtimeModel.startsWith('grok-voice-')
-    ? 'Image attachments are only available with Gemini Live. Grok Voice does not support image input.'
-    : undefined
-
   const timelineItems = useMemo(
     () => buildTimeline(messages, toolCalls),
     [messages, toolCalls],
@@ -886,44 +923,13 @@ export function ChatPage({ onNavigateToSettings }: ChatPageProps = {}) {
       setPendingAttachments([])
       return
     }
-    setSendingAttachments(true)
-    try {
-      const convId = await ensureConversation()
-      const placeholder = describePlaceholder(pendingAttachments)
-      const message = await addMessage(convId, 'user', placeholder)
-      const newAttachments: Attachment[] = []
-      const failures: string[] = []
-      for (const pending of pendingAttachments) {
-        const result = await attachToMessage(message.id, pendingToAttachmentInput(pending))
-        if (result.ok) {
-          newAttachments.push(result.attachment)
-          if (isCallActive) {
-            try {
-              realtime.sendFrame(pending.base64)
-            } catch (err) {
-              console.warn('[ChatPage] forwarding attachment to brain failed:', err)
-            }
-          }
-        } else {
-          failures.push(`${pending.originalName ?? 'attachment'}: ${result.error}`)
-        }
-      }
-      setMessages((prev) => [...prev, message])
-      setAttachments((prev) => [...prev, ...newAttachments])
-      setPendingAttachments([])
-      if (failures.length > 0) setAttachmentError(failures.join('  '))
-      else setAttachmentError(null)
-      if (!titleGeneratedRef.current) {
-        titleGeneratedRef.current = true
-        const title = generateTitle(placeholder)
-        updateConversationTitle(convId, title).catch((err) =>
-          console.warn('[ChatPage] Failed to update title:', err),
-        )
-      }
-    } finally {
-      setSendingAttachments(false)
-    }
-  }, [pendingAttachments, isCallActive, realtime, attachDisabledReason])
+    // Route through the same submit path as text + attachments. Use a
+    // short placeholder as the user "message" so the model has a prompt
+    // to act on (without it the model often replies with "I don't see
+    // anything"). The image data rides along as `images` on streamTextChat
+    // or as sendFrame() during an active call.
+    await handleComposerSubmit(describePlaceholder(pendingAttachments))
+  }, [pendingAttachments, attachDisabledReason, handleComposerSubmit])
 
   const handleDragEnter = useCallback((e: DragEvent<HTMLDivElement>) => {
     if (!hasFilePayload(e)) return
@@ -1417,6 +1423,9 @@ async function defaultRelayUrl(): Promise<string> {
 // needs entries for models the user can actually pick (set in REALTIME_MODELS).
 const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   'gemini-3.1-flash-live-preview': 131_072,
+  'gpt-realtime-2': 32_000,
+  'gpt-realtime-mini': 32_000,
+  'grok-voice-think-fast-1.0': 131_072,
 }
 const FALLBACK_CONTEXT_WINDOW = 131_072
 

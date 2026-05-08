@@ -13,7 +13,20 @@ export const GEMINI_VOICES = [
 
 export const XAI_VOICES = ['eve', 'ara', 'rex', 'sal', 'leo'] as const
 
-export type ProviderId = 'gemini' | 'xai'
+export const OPENAI_VOICES = [
+  'marin',
+  'cedar',
+  'alloy',
+  'ash',
+  'ballad',
+  'coral',
+  'echo',
+  'sage',
+  'shimmer',
+  'verse',
+] as const
+
+export type ProviderId = 'gemini' | 'xai' | 'openai'
 
 export const VOICES_BY_PROVIDER_KEY = 'realtime_voices_by_provider'
 export const LEGACY_VOICE_KEY = 'realtime_voice'
@@ -21,12 +34,14 @@ export const ACTIVE_MODEL_KEY = 'realtime_model'
 
 export function providerForModel(model: string | null | undefined): ProviderId {
   if (model && model.startsWith('grok-voice-')) return 'xai'
+  if (model && model.startsWith('gpt-realtime')) return 'openai'
   return 'gemini'
 }
 
 export function providerForVoice(voice: string): ProviderId | null {
   if ((GEMINI_VOICES as readonly string[]).includes(voice)) return 'gemini'
   if ((XAI_VOICES as readonly string[]).includes(voice)) return 'xai'
+  if ((OPENAI_VOICES as readonly string[]).includes(voice)) return 'openai'
   return null
 }
 
