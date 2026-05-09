@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.4.0](https://github.com/yagudaev/voiceclaw/compare/mobile-v1.3.0...mobile-v1.4.0) (2026-05-09)
+
+
+### Features
+
+* rewrite OpenAI Realtime adapter for GA (v2) ([#408](https://github.com/yagudaev/voiceclaw/issues/408)) ([7fee230](https://github.com/yagudaev/voiceclaw/commit/7fee230e5efbb44b111e177b044fb0e5ae01e45a))
+
 ## [1.3.0](https://github.com/yagudaev/voiceclaw/compare/mobile-v1.2.0...mobile-v1.3.0) (2026-05-01)
 
 
