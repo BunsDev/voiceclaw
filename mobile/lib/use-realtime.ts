@@ -40,7 +40,10 @@ export interface RealtimeCallbacks {
   onToolCall?: (callId: string, name: string, args: string) => void
   onToolCompleted?: (callId: string, name: string, durationMs: number, result: string) => void
   onToolFailed?: (callId: string, name: string, durationMs: number, error: string, cancelled: boolean) => void
-  onToolProgress?: (callId: string, summary: string) => void
+  onToolProgress?: (
+    callId: string,
+    progress: { textDelta?: string, step?: string, summary?: string },
+  ) => void
   onTurnStarted?: () => void
   onTurnEnded?: () => void
   onSessionReady?: (sessionId: string) => void
@@ -189,7 +192,11 @@ export function useRealtime(callbacks: RealtimeCallbacks): RealtimeControls {
         break
 
       case 'tool.progress':
-        cb.onToolProgress?.(data.callId, data.summary)
+        cb.onToolProgress?.(data.callId, {
+          textDelta: data.textDelta,
+          step: data.step,
+          summary: data.summary,
+        })
         break
 
       case 'turn.started':

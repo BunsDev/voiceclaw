@@ -338,6 +338,22 @@ export default function ChatScreen() {
         return next
       })
     },
+    onToolProgress: (callId, { textDelta, step, summary }) => {
+      setToolCalls((prev) => {
+        const existing = prev.get(callId)
+        if (!existing) return prev
+        const next = new Map(prev)
+        const latestStep = step ?? summary
+        next.set(callId, {
+          ...existing,
+          progressText: textDelta
+            ? (existing.progressText ?? '') + textDelta
+            : existing.progressText,
+          progressStep: latestStep ?? existing.progressStep,
+        })
+        return next
+      })
+    },
     onTranscriptDelta: (text, role) => {
       if (role === 'user') setIsUserSpeaking(false)
       setStreamingRole((prevRole) => {
