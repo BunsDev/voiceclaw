@@ -37,6 +37,10 @@ export interface SessionConfigEvent {
   watchdog?: "enabled" | "disabled"
   instructionsOverride?: string
   conversationHistory?: { role: "user" | "assistant", text: string, timestamp?: number, relativeMs?: number }[]
+  // When true, the realtime model is given direct tools (read/write/edit/bash)
+  // and ask_brain is removed from the exposed tool list. Default off — opt-in
+  // via session config so production keeps today's behavior unchanged.
+  experimentalDirectTools?: boolean
 }
 
 export interface AudioAppendEvent {
