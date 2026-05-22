@@ -10,7 +10,7 @@ import type {
 } from "./types.js"
 import type { ProviderAdapter, SendToClient } from "./adapters/types.js"
 import { createAdapter } from "./adapters/index.js"
-import { executeSyncTool, findRelayTool, getRelayTools, resolveTavilyKey } from "./tools/index.js"
+import { executeSyncTool, findRelayTool, getRelayTools, isBlockingLatencyClass, resolveTavilyKey } from "./tools/index.js"
 import { askBrain } from "./tools/brain.js"
 import { webSearch } from "./tools/web-search.js"
 import { buildInstructions } from "./instructions.js"
@@ -161,7 +161,7 @@ export class RelaySession {
       return
     }
 
-    const blocking = tool?.blocking ?? false
+    const blocking = tool ? isBlockingLatencyClass(tool.latencyClass) : false
     const adapterSupportsBlocking = this.adapter?.capabilities.blockingToolResponse ?? true
     if (blocking && adapterSupportsBlocking) {
       this.handleBlockingTool(callId, name, args)
