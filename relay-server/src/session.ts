@@ -13,6 +13,7 @@ import { createAdapter } from "./adapters/index.js"
 import { executeSyncTool, findRelayTool, getRelayTools, isBlockingLatencyClass, resolveTavilyKey } from "./tools/index.js"
 import { askBrain } from "./tools/brain.js"
 import { webSearch } from "./tools/web-search.js"
+import { runRead, READ_TOOL_NAME } from "./tools/direct/read.js"
 import { buildInstructions } from "./instructions.js"
 import { log, error as logError } from "./log.js"
 import { TurnTracer } from "./tracing/turn-tracer.js"
@@ -178,6 +179,10 @@ export class RelaySession {
     }
     if (name === "ask_brain") {
       this.runBlockingAskBrain(callId, args)
+      return
+    }
+    if (name === READ_TOOL_NAME) {
+      this.runReadTool(callId, args)
       return
     }
     log(`[session:${this.id}] No blocking executor registered for tool: ${name}`)
@@ -463,6 +468,38 @@ export class RelaySession {
     }).finally(() => {
       this.inFlightTools.delete(callId)
     })
+  }
+
+  private async runReadTool(callId: string, args: string) {
+    let parsed: { path?: unknown, offset?: unknown, limit?: unknown }
+    try {
+      parsed = JSON.parse(args)
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "invalid arguments"
+      const errorPayload = JSON.stringify({ error: msg })
+      this.tracer.endToolCall(callId, errorPayload, msg)
+      this.emitToolFailed(callId, READ_TOOL_NAME, msg, false)
+      this.adapter?.sendToolResult(callId, errorPayload)
+      return
+    }
+    const path = typeof parsed.path === "string" ? parsed.path : ""
+    const offset = typeof parsed.offset === "number" ? parsed.offset : undefined
+    const limit = typeof parsed.limit === "number" ? parsed.limit : undefined
+
+    log(`[session:${this.id}] read → ${path.slice(0, 120)}`)
+    const result = await runRead({ path, offset, limit })
+    const payload = JSON.stringify(result)
+
+    if ("error" in result) {
+      this.tracer.endToolCall(callId, payload, result.error)
+      this.emitToolFailed(callId, READ_TOOL_NAME, result.error, false)
+      this.adapter?.sendToolResult(callId, payload)
+      return
+    }
+
+    this.tracer.endToolCall(callId, payload)
+    this.emitToolCompleted(callId, READ_TOOL_NAME, payload)
+    this.adapter?.sendToolResult(callId, payload)
   }
 
   private handleAsyncWebSearch(callId: string, args: string) {

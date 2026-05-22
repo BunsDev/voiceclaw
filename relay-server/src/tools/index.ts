@@ -1,8 +1,15 @@
 // Tool definitions for STS sessions
 // echo_tool for testing, ask_brain for brain agent integration,
-// web_search for fast Tavily-backed lookups (only when a Tavily key is set)
+// web_search for fast Tavily-backed lookups (only when a Tavily key is set),
+// plus the experimental direct tools (read/write/edit/bash) gated by
+// experimentalDirectTools.
 
 import type { SessionConfigEvent } from "../types.js"
+import {
+  READ_TOOL_DESCRIPTION,
+  READ_TOOL_NAME,
+  READ_TOOL_PARAMETERS,
+} from "./direct/read.js"
 
 /**
  * Latency class drives the dispatch strategy in session.ts:
@@ -81,6 +88,13 @@ const WEB_SEARCH: RelayToolDefinition = {
   },
 }
 
+const READ_TOOL: RelayToolDefinition = {
+  name: READ_TOOL_NAME,
+  description: READ_TOOL_DESCRIPTION,
+  latencyClass: "fast",
+  parameters: READ_TOOL_PARAMETERS as unknown as Record<string, unknown>,
+}
+
 export function getRelayTools(config: SessionConfigEvent): RelayToolDefinition[] {
   const tools: RelayToolDefinition[] = [ECHO_TOOL]
 
@@ -90,6 +104,10 @@ export function getRelayTools(config: SessionConfigEvent): RelayToolDefinition[]
 
   if (resolveTavilyKey(config)) {
     tools.push(WEB_SEARCH)
+  }
+
+  if (config.experimentalDirectTools) {
+    tools.push(READ_TOOL)
   }
 
   return tools
@@ -161,6 +179,7 @@ export function executeSyncTool(
     }
     case "ask_brain":
     case "web_search":
+    case READ_TOOL_NAME:
       return null
     default:
       return JSON.stringify({ error: `unknown tool: ${name}` })
