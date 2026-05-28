@@ -9,6 +9,7 @@ import {
   type MouseEvent,
 } from 'react'
 import {
+  ArrowDown,
   Clock,
   Copy,
   ImagePlus,
@@ -129,6 +130,10 @@ export function ChatPage({ onNavigateToSettings }: ChatPageProps = {}) {
   const [drawMode, setDrawMode] = useState(false)
   const [hasStrokes, setHasStrokes] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
+  const scrollContainerRef = useRef<HTMLDivElement>(null)
+  const isPinnedToBottomRef = useRef(true)
+  const [isPinnedToBottom, setIsPinnedToBottom] = useState(true)
+  const [hasNewWhileUnpinned, setHasNewWhileUnpinned] = useState(false)
   const activeRelayUrlRef = useRef<string>('')
   const brainCallStartRef = useRef<Map<string, number>>(new Map())
   const textChatCancelRef = useRef<(() => void) | null>(null)
@@ -206,9 +211,35 @@ export function ChatPage({ onNavigateToSettings }: ChatPageProps = {}) {
     setShowTimes((v) => !v)
   }, [])
 
-  // Auto-scroll to bottom on new messages
+  const scrollToBottom = useCallback((behavior: ScrollBehavior = 'smooth') => {
+    const el = scrollContainerRef.current
+    if (!el) return
+    el.scrollTo({ top: el.scrollHeight, behavior })
+    isPinnedToBottomRef.current = true
+    setIsPinnedToBottom(true)
+    setHasNewWhileUnpinned(false)
+  }, [])
+
+  // Pin-to-bottom: re-anchor only when the user is already at the bottom.
+  // Scrolling up parks the viewport so streaming output doesn't yank it down.
+  const handleTranscriptScroll = useCallback(() => {
+    const el = scrollContainerRef.current
+    if (!el) return
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight
+    const pinned = distanceFromBottom <= 40
+    if (pinned !== isPinnedToBottomRef.current) {
+      isPinnedToBottomRef.current = pinned
+      setIsPinnedToBottom(pinned)
+      if (pinned) setHasNewWhileUnpinned(false)
+    }
+  }, [])
+
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+    if (isPinnedToBottomRef.current) {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+    } else {
+      setHasNewWhileUnpinned(true)
+    }
   }, [messages, toolCalls, streamingText, isThinking])
 
   // Load conversation when selected from History tab
@@ -1040,7 +1071,12 @@ export function ChatPage({ onNavigateToSettings }: ChatPageProps = {}) {
       </div>
 
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto overflow-x-hidden px-4 py-4">
+      <div className="flex-1 relative min-h-0">
+        <div
+          ref={scrollContainerRef}
+          onScroll={handleTranscriptScroll}
+          className="absolute inset-0 overflow-y-auto overflow-x-hidden px-4 py-4"
+        >
         {messages.length === 0 && !isCallActive && (
           <div className="flex h-full flex-col items-center justify-center text-center text-muted-foreground">
             <div className="mb-5 flex size-16 items-center justify-center rounded-md border border-border bg-card text-foreground vc-panel-shadow">
@@ -1103,6 +1139,17 @@ export function ChatPage({ onNavigateToSettings }: ChatPageProps = {}) {
           </div>
         )}
         <div ref={messagesEndRef} />
+        </div>
+        {!isPinnedToBottom && hasNewWhileUnpinned && (
+          <button
+            type="button"
+            onClick={() => scrollToBottom('smooth')}
+            className="absolute bottom-3 right-4 flex items-center gap-1.5 rounded-full border border-border bg-card/95 backdrop-blur px-3 py-1.5 text-xs text-foreground shadow-md hover:bg-card transition-colors"
+          >
+            <ArrowDown size={12} />
+            Jump to latest
+          </button>
+        )}
       </div>
 
       {/* Context usage debug strip */}
