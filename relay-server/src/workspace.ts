@@ -73,6 +73,12 @@ imperative-loop agents that will do the work in their own loop and stream
 progress back to you. Narrate what they're doing to the user as their output
 arrives. Do NOT try to drive a multi-step refactor with successive
 read/write/edit calls — that is what the imperative agents are for.
+
+For tasks that may run longer than ~2 minutes (big builds, long \`claude -p\`
+delegations, scrapes), call \`bash\` with \`background:true\`. You'll get back
+a \`jobId\` and \`logPath\` immediately; the job keeps running detached. To
+check on it later, use the \`read\` tool on the \`logPath\`. The job has
+finished when the log ends with a \`[task-exit N]\` line.
 `
 
 export const DEFAULT_IDENTITY_MD = `# IDENTITY.md - Who Am I?
@@ -147,6 +153,10 @@ export function getJobsDir(): string {
   return join(getWorkspaceRoot(), "jobs")
 }
 
+export function getTasksDir(): string {
+  return join(getWorkspaceRoot(), "tasks")
+}
+
 // Resolves the packaged skill defaults directory. Sits next to the relay-server
 // source/build, so the path works the same in tsx (running from src/) and from
 // the compiled dist/. Tests can point at a fixtures dir via the env override.
@@ -163,6 +173,7 @@ export async function ensureWorkspace(): Promise<void> {
   await fs.mkdir(getMemoryDir(), { recursive: true })
   await fs.mkdir(getSkillsDir(), { recursive: true })
   await fs.mkdir(getJobsDir(), { recursive: true })
+  await fs.mkdir(getTasksDir(), { recursive: true })
   await seedIfMissing(getAgentsMdPath(), DEFAULT_AGENTS_MD)
   await seedIfMissing(getIdentityPath(), DEFAULT_IDENTITY_MD)
   await seedIfMissing(getSoulPath(), DEFAULT_SOUL_MD)

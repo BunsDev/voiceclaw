@@ -1,13 +1,14 @@
 import { describe, expect, it, beforeEach, afterEach } from "vitest"
-import { mkdtemp, realpath, rm } from "node:fs/promises"
+import { mkdtemp, readFile, realpath, rm, stat } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import {
   PER_STREAM_CAP_BYTES,
   DEFAULT_TIMEOUT_MS,
+  MAX_TIMEOUT_MS,
   runBash,
 } from "../../../src/tools/direct/bash.js"
-import { ensureWorkspace, getWorkspaceRoot } from "../../../src/workspace.js"
+import { ensureWorkspace, getTasksDir, getWorkspaceRoot } from "../../../src/workspace.js"
 
 describe("bash tool", () => {
   let tmpRoot: string
@@ -121,5 +122,117 @@ describe("bash tool", () => {
 
   it("DEFAULT_TIMEOUT_MS is sane", () => {
     expect(DEFAULT_TIMEOUT_MS).toBeGreaterThan(0)
+  })
+
+  it("default timeout is 120 seconds (matches the foreground hard cap)", () => {
+    expect(DEFAULT_TIMEOUT_MS).toBe(120_000)
+    expect(MAX_TIMEOUT_MS).toBe(120_000)
+  })
+
+  describe("background mode", () => {
+    it("returns immediately with jobId + logPath + pid", async () => {
+      const start = Date.now()
+      const result = await runBash({ command: "sleep 5", background: true })
+      const elapsed = Date.now() - start
+      if ("error" in result) throw new Error(result.error)
+      if (!("background" in result) || !result.background) {
+        throw new Error("expected background result")
+      }
+      // Return path is just spawn + log open, well under the 5s sleep.
+      expect(elapsed).toBeLessThan(2000)
+      expect(typeof result.jobId).toBe("string")
+      expect(result.jobId.length).toBeGreaterThan(0)
+      expect(typeof result.pid === "number" || result.pid === null).toBe(true)
+      expect(result.logPath.startsWith(getTasksDir())).toBe(true)
+      expect(result.message).toMatch(/background/i)
+    })
+
+    it("writes the command's output to the log file and appends task-exit on completion", async () => {
+      const result = await runBash(
+        { command: "echo hello-from-background", background: true },
+      )
+      if ("error" in result) throw new Error(result.error)
+      if (!("background" in result) || !result.background) {
+        throw new Error("expected background result")
+      }
+
+      // Spin until the wrapper appends [task-exit N]. echo + exit is fast.
+      const deadline = Date.now() + 5000
+      let contents = ""
+      while (Date.now() < deadline) {
+        try {
+          contents = await readFile(result.logPath, "utf-8")
+          if (/\[task-exit \d+\]/.test(contents)) break
+        } catch { /* not yet written */ }
+        await new Promise((r) => setTimeout(r, 50))
+      }
+      expect(contents).toContain("hello-from-background")
+      expect(contents).toMatch(/\[task-exit 0\]/)
+    })
+
+    it("captures non-zero exit codes in the task-exit marker", async () => {
+      const result = await runBash({ command: "exit 7", background: true })
+      if ("error" in result) throw new Error(result.error)
+      if (!("background" in result) || !result.background) {
+        throw new Error("expected background result")
+      }
+
+      const deadline = Date.now() + 5000
+      let contents = ""
+      while (Date.now() < deadline) {
+        try {
+          contents = await readFile(result.logPath, "utf-8")
+          if (/\[task-exit \d+\]/.test(contents)) break
+        } catch { /* not yet written */ }
+        await new Promise((r) => setTimeout(r, 50))
+      }
+      expect(contents).toMatch(/\[task-exit 7\]/)
+    })
+
+    it("creates the tasks directory if it does not yet exist", async () => {
+      // ensureWorkspace already created it in beforeEach — verify it's there.
+      const info = await stat(getTasksDir())
+      expect(info.isDirectory()).toBe(true)
+    })
+
+    it("background log file is unique per job", async () => {
+      const a = await runBash({ command: "echo a", background: true })
+      const b = await runBash({ command: "echo b", background: true })
+      if ("error" in a || "error" in b) throw new Error("background spawn failed")
+      if (!("background" in a) || !("background" in b)) throw new Error("expected background")
+      expect(a.jobId).not.toBe(b.jobId)
+      expect(a.logPath).not.toBe(b.logPath)
+    })
+
+    it("respects the bash denylist even in background mode", async () => {
+      const result = await runBash({ command: "sudo rm -rf /", background: true })
+      expect("error" in result).toBe(true)
+      expect((result as { error: string }).error).toMatch(/safety policy/)
+    })
+
+    it("ignores timeout_ms in background mode (job runs detached)", async () => {
+      // If we accidentally applied timeout_ms to the detached child, the log
+      // would never see [task-exit 0] for a slow command. Use a short sleep
+      // and prove it finishes despite a stub timeout.
+      const result = await runBash(
+        { command: "sleep 1; echo done", background: true, timeout_ms: 200 },
+      )
+      if ("error" in result) throw new Error(result.error)
+      if (!("background" in result) || !result.background) {
+        throw new Error("expected background result")
+      }
+
+      const deadline = Date.now() + 5000
+      let contents = ""
+      while (Date.now() < deadline) {
+        try {
+          contents = await readFile(result.logPath, "utf-8")
+          if (/\[task-exit \d+\]/.test(contents)) break
+        } catch { /* not yet written */ }
+        await new Promise((r) => setTimeout(r, 50))
+      }
+      expect(contents).toContain("done")
+      expect(contents).toMatch(/\[task-exit 0\]/)
+    })
   })
 })

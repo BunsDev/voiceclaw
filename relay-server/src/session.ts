@@ -591,7 +591,7 @@ export class RelaySession {
   private handleBashTool(callId: string, args: string) {
     if (!this.config) return
 
-    let parsed: { command?: unknown, timeout_ms?: unknown }
+    let parsed: { command?: unknown, timeout_ms?: unknown, background?: unknown }
     try {
       parsed = JSON.parse(args)
     } catch (e) {
@@ -604,6 +604,7 @@ export class RelaySession {
     }
     const command = typeof parsed.command === "string" ? parsed.command : ""
     const timeoutMs = typeof parsed.timeout_ms === "number" ? parsed.timeout_ms : undefined
+    const background = parsed.background === true
 
     if (command.trim().length === 0) {
       const msg = "command is required"
@@ -625,7 +626,7 @@ export class RelaySession {
     log(`[session:${this.id}] bash → ${command.slice(0, 120)}`)
     const startedAt = Date.now()
 
-    runBash({ command, timeout_ms: timeoutMs }, {
+    runBash({ command, timeout_ms: timeoutMs, background }, {
       signal: controller.signal,
       onProgress: (event) => {
         if (controller.signal.aborted) return
@@ -658,9 +659,15 @@ export class RelaySession {
 
       this.tracer.endToolCall(callId, payload)
       this.emitToolCompleted(callId, BASH_TOOL_NAME, payload)
-      this.adapter?.injectContext(
-        `[bash result for command: ${command.slice(0, 200)}]\n${payload}\n\nNarrate the outcome to the user.`,
-      )
+      if ("background" in result && result.background) {
+        this.adapter?.injectContext(
+          `[bash launched in background: ${command.slice(0, 200)}]\njobId=${result.jobId} pid=${result.pid ?? "?"} logPath=${result.logPath}\n\nThe job is running detached. Tell the user briefly that it's started, then move on. When they ask how it's going (or after enough time), use the read tool on ${result.logPath} to check the latest output; a trailing "[task-exit N]" line means it finished.`,
+        )
+      } else {
+        this.adapter?.injectContext(
+          `[bash result for command: ${command.slice(0, 200)}]\n${payload}\n\nNarrate the outcome to the user.`,
+        )
+      }
     }).catch((err) => {
       const message = err instanceof Error ? err.message : "bash failed"
       logError(`[session:${this.id}] bash error:`, message)

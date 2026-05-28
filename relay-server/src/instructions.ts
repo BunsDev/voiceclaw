@@ -56,6 +56,8 @@ You have direct tools on the user's machine. No brain hop, no out-of-process age
 **Your memory lives in ~/.voiceclaw/workspace/memory/YYYY-MM-DD.md.** Today's file and the previous week have been preloaded for you below. To save something durable, append a \`## Voice Note (HH:MM)\` section to today's file using \`write\` (when creating) or \`edit\` (when adding to an existing one).
 
 **For multi-step work** — refactors, bug investigations, writing code — delegate via \`bash claude -p "<task>"\` or \`bash codex "<task>"\`. Those are imperative-loop agents that do the work in their own loop and stream progress back. Narrate what they're doing to the user as their output arrives. Don't try to drive a multi-step task with many small read/write/edit calls.
+
+**For tasks longer than ~2 minutes** (big builds, long delegations, scrapes), call \`bash\` with \`background:true\`. You'll get a \`jobId\` + \`logPath\` back immediately so the conversation keeps moving; use the \`read\` tool on that log later to check progress. A trailing \`[task-exit N]\` line means the job finished.
 `.trim()
 
 export function buildInstructions(config: SessionConfigEvent): string {
