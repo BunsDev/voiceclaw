@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import type { UpdateState } from '../lib/db'
 import { Wifi, WifiOff, Eye, EyeOff, Play } from 'lucide-react'
 import { Button } from '../components/ui/Button'
@@ -82,12 +82,16 @@ const REALTIME_MODELS: readonly RealtimeModel[] = [
   'gpt-realtime-mini',
 ]
 
-const PROVIDER_ORDER: readonly ProviderId[] = ['gemini', 'openai', 'xai']
-
 const PROVIDER_LABELS: Record<ProviderId, string> = {
   gemini: 'Gemini',
   openai: 'OpenAI',
-  xai: 'xAI / Grok',
+  xai: 'xAI',
+}
+
+const PROVIDER_DISPLAY_LABELS: Record<ProviderId, string> = {
+  gemini: 'Google',
+  openai: 'OpenAI',
+  xai: 'xAI',
 }
 
 const PROVIDER_KEY_META: Record<
@@ -711,66 +715,13 @@ export function SettingsPage() {
           </div>
         </Card>
 
-        {/* Model */}
-        <Card className="p-4 space-y-4">
-          <h3 className="text-sm font-semibold text-foreground">Model</h3>
-          <div className="space-y-1.5">
-            {REALTIME_MODELS.map((m) => {
-              return (
-                <button
-                  key={m}
-                  onClick={() => updateModel(m)}
-                  className={`w-full flex items-center gap-3 rounded-md border px-3 py-2 text-left transition-colors
-                    ${model === m ? 'border-primary bg-accent' : 'border-input'}
-                    hover:bg-accent cursor-pointer
-                  `}
-                >
-                  <div className={`h-3.5 w-3.5 rounded-full border-2 flex items-center justify-center
-                    ${model === m ? 'border-primary' : 'border-muted-foreground'}
-                  `}>
-                    {model === m && <div className="h-1.5 w-1.5 rounded-full bg-primary" />}
-                  </div>
-                  <span className={`text-sm ${model === m ? 'font-medium text-foreground' : 'text-muted-foreground'}`}>
-                    {REALTIME_MODEL_LABELS[m]}
-                  </span>
-                </button>
-              )
-            })}
-          </div>
-        </Card>
-
-        {/* Provider Keys */}
-        <Card className="p-4 space-y-4">
-          <div>
-            <h3 className="text-sm font-semibold text-foreground">Provider Keys</h3>
-            <p className="text-xs text-muted-foreground mt-1">
-              Realtime model API keys. Stored encrypted in macOS Keychain — never leave this Mac.
-            </p>
-          </div>
-
-          <div className="space-y-3">
-            {PROVIDER_ORDER.map((p) => (
-              <ProviderKeyRow
-                key={p}
-                provider={p}
-                configured={configuredProviders.includes(p)}
-                onSaved={refreshConfiguredProviders}
-              />
-            ))}
-          </div>
-
-          <div className="flex items-start justify-between gap-3 rounded-md border border-dashed border-input bg-muted/30 px-3 py-2 opacity-70">
-            <div>
-              <p className="text-sm text-foreground">Managed key</p>
-              <p className="text-xs text-muted-foreground">
-                Use a VoiceClaw-hosted key instead of bringing your own. Coming soon.
-              </p>
-            </div>
-            <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
-              Soon
-            </span>
-          </div>
-        </Card>
+        {/* Voice Model */}
+        <VoiceModelCard
+          model={model}
+          configuredProviders={configuredProviders}
+          onSelectModel={updateModel}
+          onSaved={refreshConfiguredProviders}
+        />
 
         {/* Voice */}
         <Card className="p-4 space-y-4">
@@ -1308,20 +1259,207 @@ type ProviderKeyStatus =
   | { kind: 'saved' }
   | { kind: 'error'; message: string }
 
-function ProviderKeyRow({
+function VoiceModelCard({
+  model,
+  configuredProviders,
+  onSelectModel,
+  onSaved,
+}: {
+  model: RealtimeModel
+  configuredProviders: ProviderId[]
+  onSelectModel: (m: RealtimeModel) => void
+  onSaved: () => void | Promise<void>
+}) {
+  const [editorAnchor, setEditorAnchor] = useState<RealtimeModel | null>(null)
+
+  const handleSelect = useCallback(
+    (m: RealtimeModel) => {
+      onSelectModel(m)
+      const provider = providerForModel(m)
+      if (!configuredProviders.includes(provider)) {
+        setEditorAnchor(m)
+      } else {
+        setEditorAnchor(null)
+      }
+    },
+    [configuredProviders, onSelectModel],
+  )
+
+  const handleSaved = useCallback(async () => {
+    await onSaved()
+    setEditorAnchor(null)
+  }, [onSaved])
+
+  return (
+    <Card className="p-4 space-y-4">
+      <h3 className="text-sm font-semibold text-foreground">Voice Model</h3>
+
+      <div className="space-y-1.5" role="radiogroup" aria-label="Voice model">
+        {REALTIME_MODELS.map((m) => {
+          const provider = providerForModel(m)
+          const isConfigured = configuredProviders.includes(provider)
+          const isSelected = model === m
+          const isEditorOpen = editorAnchor === m
+          return (
+            <div key={m}>
+              <ModelRow
+                model={m}
+                selected={isSelected}
+                provider={provider}
+                configured={isConfigured}
+                onSelect={() => handleSelect(m)}
+                onOpenEditor={() => setEditorAnchor(m)}
+              />
+              {isEditorOpen && (
+                <InlineKeyEditor
+                  provider={provider}
+                  configured={isConfigured}
+                  requiredForModel={
+                    isSelected && !isConfigured ? REALTIME_MODEL_LABELS[m] : null
+                  }
+                  onSaved={handleSaved}
+                  onClose={() => setEditorAnchor(null)}
+                />
+              )}
+            </div>
+          )
+        })}
+      </div>
+
+      <div className="pt-3 border-t border-input space-y-2">
+        <p className="text-[11px] uppercase tracking-wider text-muted-foreground">
+          Key source
+        </p>
+        <div className="grid grid-cols-2 gap-2">
+          <div className="flex items-center gap-2 rounded-md border border-primary bg-accent px-3 py-2">
+            <div className="h-3.5 w-3.5 rounded-full border-2 border-primary flex items-center justify-center">
+              <div className="h-1.5 w-1.5 rounded-full bg-primary" />
+            </div>
+            <span className="text-sm font-medium text-foreground">
+              Use my API keys
+            </span>
+          </div>
+          <div className="flex items-center justify-between gap-2 rounded-md border border-dashed border-input bg-muted/30 px-3 py-2 opacity-60">
+            <div className="flex items-center gap-2">
+              <div className="h-3.5 w-3.5 rounded-full border-2 border-muted-foreground" />
+              <span className="text-sm text-muted-foreground">
+                Managed by VoiceClaw
+              </span>
+            </div>
+            <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
+              Soon
+            </span>
+          </div>
+        </div>
+      </div>
+    </Card>
+  )
+}
+
+function ModelRow({
+  model,
+  selected,
   provider,
   configured,
+  onSelect,
+  onOpenEditor,
+}: {
+  model: RealtimeModel
+  selected: boolean
+  provider: ProviderId
+  configured: boolean
+  onSelect: () => void
+  onOpenEditor: () => void
+}) {
+  const handleKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault()
+      onSelect()
+    }
+  }
+  return (
+    <div
+      onClick={onSelect}
+      onKeyDown={handleKeyDown}
+      role="radio"
+      aria-checked={selected}
+      tabIndex={0}
+      className={`w-full flex items-center gap-3 rounded-md border px-3 py-2 transition-colors cursor-pointer
+        ${selected ? 'border-primary bg-accent' : 'border-input'}
+        hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50
+      `}
+    >
+      <div
+        className={`h-3.5 w-3.5 rounded-full border-2 flex items-center justify-center shrink-0
+          ${selected ? 'border-primary' : 'border-muted-foreground'}
+        `}
+      >
+        {selected && <div className="h-1.5 w-1.5 rounded-full bg-primary" />}
+      </div>
+
+      <span
+        className={`text-sm flex-1 truncate ${selected ? 'font-medium text-foreground' : 'text-foreground'}`}
+      >
+        {REALTIME_MODEL_LABELS[model]}
+      </span>
+
+      <span className="text-[11px] text-muted-foreground shrink-0">
+        {PROVIDER_DISPLAY_LABELS[provider]}
+      </span>
+
+      {configured ? (
+        <div className="flex items-center gap-2 shrink-0">
+          <span className="text-xs text-[var(--brand-sage)]">✓ Configured</span>
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation()
+              onOpenEditor()
+            }}
+            className="text-[11px] text-muted-foreground underline underline-offset-2 hover:text-foreground"
+          >
+            Manage
+          </button>
+        </div>
+      ) : (
+        <div className="flex items-center gap-2 shrink-0">
+          <span className="text-xs text-amber-600 dark:text-amber-400">
+            Missing key
+          </span>
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation()
+              onOpenEditor()
+            }}
+            className="rounded-md border border-input bg-background px-2 py-0.5 text-[11px] font-medium text-foreground hover:bg-muted"
+          >
+            Add key
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function InlineKeyEditor({
+  provider,
+  configured,
+  requiredForModel,
   onSaved,
+  onClose,
 }: {
   provider: ProviderId
   configured: boolean
+  requiredForModel: string | null
   onSaved: () => void | Promise<void>
+  onClose: () => void
 }) {
   const [key, setKey] = useState('')
   const [show, setShow] = useState(false)
   const [status, setStatus] = useState<ProviderKeyStatus>({ kind: 'idle' })
   const meta = PROVIDER_KEY_META[provider]
-  const label = PROVIDER_LABELS[provider]
+  const providerLabel = PROVIDER_LABELS[provider]
 
   const handleSave = useCallback(async () => {
     if (key.length < 8) {
@@ -1349,25 +1487,26 @@ function ProviderKeyRow({
   }, [provider, key, onSaved])
 
   return (
-    <div className="space-y-1.5">
+    <div className="mt-1.5 ml-6 mr-0 rounded-md border border-input bg-muted/30 p-3 space-y-2">
       <div className="flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
-          <label className="text-xs font-medium text-foreground">{label}</label>
-          {configured && (
-            <span className="text-[10px] uppercase tracking-wider text-[var(--brand-sage)]">
-              ✓ Configured
-            </span>
-          )}
-        </div>
-        <a
-          href={meta.url}
-          target="_blank"
-          rel="noreferrer"
-          className="text-[11px] text-muted-foreground underline underline-offset-2 hover:text-foreground"
+        <label className="text-xs font-medium text-foreground">
+          {providerLabel} API key
+        </label>
+        <button
+          type="button"
+          onClick={onClose}
+          className="text-[11px] text-muted-foreground hover:text-foreground"
         >
-          Get a key at {meta.linkLabel}
-        </a>
+          Cancel
+        </button>
       </div>
+
+      {requiredForModel && (
+        <p className="text-[11px] text-amber-600 dark:text-amber-400">
+          {providerLabel} key required to use {requiredForModel}.
+        </p>
+      )}
+
       <div className="flex gap-2">
         <div className="flex-1 relative">
           <Input
@@ -1379,6 +1518,7 @@ function ProviderKeyRow({
             }}
             placeholder={configured ? '••••••••  (replace to update)' : meta.placeholder}
             className="pr-10"
+            autoFocus
           />
           <button
             type="button"
@@ -1398,14 +1538,25 @@ function ProviderKeyRow({
           {status.kind === 'saving' ? 'Checking…' : 'Validate + save'}
         </Button>
       </div>
-      {status.kind === 'saved' && (
-        <p className="text-[11px] text-[var(--brand-sage)]">Key saved.</p>
-      )}
-      {status.kind === 'error' && (
-        <p className="text-[11px] text-destructive" role="alert">
-          {status.message}
-        </p>
-      )}
+
+      <div className="flex items-center justify-between gap-2">
+        <a
+          href={meta.url}
+          target="_blank"
+          rel="noreferrer"
+          className="text-[11px] text-muted-foreground underline underline-offset-2 hover:text-foreground"
+        >
+          Get a key at {meta.linkLabel}
+        </a>
+        {status.kind === 'saved' && (
+          <span className="text-[11px] text-[var(--brand-sage)]">Key saved.</span>
+        )}
+        {status.kind === 'error' && (
+          <span className="text-[11px] text-destructive" role="alert">
+            {status.message}
+          </span>
+        )}
+      </div>
     </div>
   )
 }
