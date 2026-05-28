@@ -16,7 +16,7 @@ if (Platform.OS === 'android') {
   UIManager.setLayoutAnimationEnabledExperimental?.(true)
 }
 
-export type ToolCallStatus = 'in-progress' | 'success' | 'error' | 'cancelled'
+export type ToolCallStatus = 'in-progress' | 'success' | 'error' | 'cancelled' | 'stopped'
 
 export interface ToolCallItem {
   callId: string
@@ -235,7 +235,7 @@ function StatusIcon({ status, palette }: { status: ToolCallStatus, palette: Bran
   if (status === 'in-progress') {
     return <ActivityIndicator size="small" color={palette.muted} style={{ width: 16, height: 16 }} />
   }
-  const icon = status === 'success' ? '✓' : status === 'error' ? '✕' : '—'
+  const icon = status === 'success' ? '✓' : status === 'error' ? '✕' : status === 'stopped' ? '◼' : '—'
   const color = status === 'success' ? palette.sage : status === 'error' ? palette.destructive : palette.muted
   return (
     <Text style={{ fontSize: 13, color, fontWeight: '600', width: 16, textAlign: 'center' }}>

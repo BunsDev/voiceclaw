@@ -19,7 +19,7 @@ import { Stack } from 'expo-router'
 import { MicIcon, MicOffIcon, PhoneOffIcon, PlusIcon, RefreshCwIcon, SendIcon, XIcon } from 'lucide-react-native'
 import { useColorScheme } from 'nativewind'
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { ActivityIndicator, Animated, FlatList, Image, KeyboardAvoidingView, Platform, Pressable, View } from 'react-native'
+import { ActivityIndicator, Animated, FlatList, Image, KeyboardAvoidingView, NativeScrollEvent, NativeSyntheticEvent, Platform, Pressable, View } from 'react-native'
 
 const MD_IMAGE_REGEX = /!\[([^\]]*)\]\(([^)]+)\)/g
 const URL_IMAGE_REGEX = /(?:^|\s)(https?:\/\/\S+\.(?:png|jpg|jpeg|gif|webp)(?:\?\S*)?)/gi
@@ -69,7 +69,8 @@ export default function ChatScreen() {
   const [streamingRole, setStreamingRole] = useState<'user' | 'assistant'>('assistant')
   const [isUserSpeaking, setIsUserSpeaking] = useState(false)
   const flatListRef = useRef<FlatList<DisplayItem>>(null)
-  const hasScrolledRef = useRef(false)
+  const initialLoadGraceRef = useRef(true)
+  const isPinnedToBottomRef = useRef(true)
   const { playJoin, playEnd, startThinking, stopThinking } = useCallSounds()
   const soundsRef = useRef({ playJoin, playEnd, startThinking, stopThinking })
   soundsRef.current = { playJoin, playEnd, startThinking, stopThinking }
@@ -103,19 +104,42 @@ export default function ChatScreen() {
     },
     onToolCompleted: (callId, name, durationMs, result) => {
       setToolCalls((prev) => {
-        const existing = prev.get(callId)
-        if (!existing) return prev
         const next = new Map(prev)
-        next.set(callId, { ...existing, status: 'success', durationMs, result })
+        const existing = prev.get(callId)
+        if (existing) {
+          next.set(callId, { ...existing, status: 'success', durationMs, result })
+        } else {
+          next.set(callId, {
+            callId,
+            name,
+            args: '',
+            status: 'success',
+            startedAt: Date.now() - durationMs,
+            durationMs,
+            result,
+          })
+        }
         return next
       })
     },
     onToolFailed: (callId, name, durationMs, error, cancelled) => {
       setToolCalls((prev) => {
-        const existing = prev.get(callId)
-        if (!existing) return prev
         const next = new Map(prev)
-        next.set(callId, { ...existing, status: cancelled ? 'cancelled' : 'error', durationMs, error })
+        const existing = prev.get(callId)
+        const status: ToolCallItem['status'] = cancelled ? 'cancelled' : 'error'
+        if (existing) {
+          next.set(callId, { ...existing, status, durationMs, error })
+        } else {
+          next.set(callId, {
+            callId,
+            name,
+            args: '',
+            status,
+            startedAt: Date.now() - durationMs,
+            durationMs,
+            error,
+          })
+        }
         return next
       })
     },
@@ -225,24 +249,29 @@ export default function ChatScreen() {
   cancelReconnectRef.current = cancelReconnect
   triggerReconnectRef.current = triggerReconnect
 
+  const resetScrollAnchoring = useCallback(() => {
+    initialLoadGraceRef.current = true
+    isPinnedToBottomRef.current = true
+  }, [])
+
   const startNewConversation = useCallback(async () => {
-    hasScrolledRef.current = false
+    resetScrollAnchoring()
     const conv = await createConversation()
     setConversationId(conv.id)
     setMessages([])
     setToolCalls(new Map())
     setStreamingText(null)
     setIsThinking(false)
-  }, [])
+  }, [resetScrollAnchoring])
 
   const loadConversation = useCallback(async (id: number) => {
-    hasScrolledRef.current = false
+    resetScrollAnchoring()
     setConversationId(id)
     setMessages(await getMessages(id))
     setToolCalls(new Map())
     setStreamingText(null)
     setIsThinking(false)
-  }, [])
+  }, [resetScrollAnchoring])
 
   // Handle conversation selection from History tab
   useEffect(() => {
@@ -271,6 +300,32 @@ export default function ChatScreen() {
   }, [])
 
   useEffect(() => { loadMessages() }, [loadMessages])
+
+  useEffect(() => {
+    if (conversationId == null) return
+    initialLoadGraceRef.current = true
+    isPinnedToBottomRef.current = true
+    const t = setTimeout(() => { initialLoadGraceRef.current = false }, 600)
+    return () => clearTimeout(t)
+  }, [conversationId])
+
+  const handleListScroll = useCallback((e: NativeSyntheticEvent<NativeScrollEvent>) => {
+    const { contentOffset, layoutMeasurement, contentSize } = e.nativeEvent
+    const distanceFromBottom = contentSize.height - contentOffset.y - layoutMeasurement.height
+    const pinned = distanceFromBottom <= 80
+    isPinnedToBottomRef.current = pinned
+    if (!pinned) initialLoadGraceRef.current = false
+  }, [])
+
+  const handleContentSizeChange = useCallback(() => {
+    if (initialLoadGraceRef.current) {
+      flatListRef.current?.scrollToEnd({ animated: false })
+      return
+    }
+    if (isPinnedToBottomRef.current) {
+      flatListRef.current?.scrollToEnd({ animated: true })
+    }
+  }, [])
 
   const sendMessage = useCallback(async () => {
     if (!inputText.trim() || !conversationId) return
@@ -445,8 +500,15 @@ export default function ChatScreen() {
     setIsMuted(false)
     setIsThinking(false)
     setIsUserSpeaking(false)
+    setToolCalls(settleInProgressToolCalls)
     soundsRef.current.playEnd()
   }, [realtime, cancelReconnect])
+
+  useEffect(() => {
+    if (reconnectState.status === 'failed') {
+      setToolCalls(settleInProgressToolCalls)
+    }
+  }, [reconnectState.status])
 
   const toggleMute = useCallback(async () => {
     const newMuted = !isMuted
@@ -500,11 +562,13 @@ export default function ChatScreen() {
           )
         }}
         contentContainerStyle={{ paddingTop: 16, paddingBottom: 8 }}
-        onContentSizeChange={() => {
-          const animated = hasScrolledRef.current
-          hasScrolledRef.current = true
-          flatListRef.current?.scrollToEnd({ animated })
-        }}
+        onContentSizeChange={handleContentSizeChange}
+        onScroll={handleListScroll}
+        scrollEventThrottle={64}
+        initialNumToRender={20}
+        maxToRenderPerBatch={20}
+        windowSize={11}
+        removeClippedSubviews={Platform.OS === 'android'}
         ListEmptyComponent={
           <View testID="empty-chat-placeholder" className="flex-1 items-center justify-center pt-40">
             <View className="mb-5 size-16 items-center justify-center rounded-md border border-border bg-card">
@@ -639,6 +703,22 @@ export default function ChatScreen() {
 }
 
 // --- Helper Components ---
+
+function settleInProgressToolCalls(prev: Map<string, ToolCallItem>): Map<string, ToolCallItem> {
+  let changed = false
+  const next = new Map(prev)
+  const now = Date.now()
+  for (const [callId, item] of prev) {
+    if (item.status !== 'in-progress') continue
+    next.set(callId, {
+      ...item,
+      status: 'stopped',
+      durationMs: now - item.startedAt,
+    })
+    changed = true
+  }
+  return changed ? next : prev
+}
 
 function buildDisplayItems(messages: Message[], toolCalls: Map<string, ToolCallItem>): DisplayItem[] {
   const items: DisplayItem[] = messages.map((m) => ({ kind: 'message' as const, message: m }))
