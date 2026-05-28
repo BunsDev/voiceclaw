@@ -100,6 +100,15 @@ export class GeminiAdapter implements ProviderAdapter {
   // stay coherent.
   private dropPendingAudioOnFlush = false
 
+  // Gemini Live treats realtimeInput.text as typed user speech and echoes it
+  // back as serverContent.inputTranscription deltas. Without suppression the
+  // raw inject envelope ("[bash result for command: …] … Narrate the outcome
+  // to the user.") surfaces as a user transcript bubble on the client.
+  // OpenAI/xAI use conversation.item.create which bypasses the transcription
+  // stream entirely; on Gemini 3.1 Flash Live clientContent triggers a 1007
+  // mid-session, so we keep realtimeInput.text and instead strip the echo.
+  private injectionEchoBuffer = ""
+
   // Per-turn latency marks, emitted on turnComplete. Gemini Live has no
   // explicit "end-of-speech" event — we proxy it via the last inputTranscription
   // delta timestamp (loose — includes transcription latency) and fall back to
@@ -505,6 +514,7 @@ export class GeminiAdapter implements ProviderAdapter {
     // Gemini 3.1 Flash Live and triggers 1007. realtimeInput.text can be sent
     // concurrently with audio streaming without conflict.
     log(`[gemini] Injecting context via realtimeInput.text (${text.length} chars)`)
+    this.injectionEchoBuffer += text
     this.sendUpstream({
       realtimeInput: {
         text,
@@ -524,6 +534,7 @@ export class GeminiAdapter implements ProviderAdapter {
     this.disconnected = true
     this.clearWatchdog()
     this.clearPostResumeWatchdog()
+    this.injectionEchoBuffer = ""
     if (this.videoIdleTimer) {
       clearTimeout(this.videoIdleTimer)
       this.videoIdleTimer = null
@@ -793,44 +804,51 @@ export class GeminiAdapter implements ProviderAdapter {
     // Input transcription (user speech → text)
     // Synthesize turn.started so client stops playback (prevents echo)
     if (content.inputTranscription?.text) {
-      // Every input-transcription delta refreshes our proxy for end-of-speech
-      // — the LAST one before modelTurn is our best non-explicit signal.
-      this.lastInputTranscriptionAtMs = Date.now()
-      if (this.awaitingResumeFirstInput) {
-        this.awaitingResumeFirstInput = false
-        this.armPostResumeWatchdog()
-      }
-      if (!this.userSpeaking) {
-        this.userSpeaking = true
-        // Reset per-turn marks at the start of the user's turn. Done here
-        // (not in turnComplete) because Gemini's turnComplete lands AFTER the
-        // assistant finishes — the next turn's marks would otherwise clobber
-        // in-flight state if the user is quick.
-        this.resetLatencyMarks()
-        this.turnStartedAtMs = Date.now()
-        this.sendToClient?.({ type: "turn.started" })
-      }
-      // Flush any accumulated assistant text — user is speaking again
-      if (this.currentAssistantText) {
-        this.transcript.push({ role: "assistant", text: this.currentAssistantText })
+      const visibleText = this.consumeInjectionEcho(content.inputTranscription.text)
+      if (visibleText) {
+        // Every input-transcription delta refreshes our proxy for end-of-speech
+        // — the LAST one before modelTurn is our best non-explicit signal.
+        this.lastInputTranscriptionAtMs = Date.now()
+        if (this.awaitingResumeFirstInput) {
+          this.awaitingResumeFirstInput = false
+          this.armPostResumeWatchdog()
+        }
+        if (!this.userSpeaking) {
+          this.userSpeaking = true
+          // Reset per-turn marks at the start of the user's turn. Done here
+          // (not in turnComplete) because Gemini's turnComplete lands AFTER the
+          // assistant finishes — the next turn's marks would otherwise clobber
+          // in-flight state if the user is quick.
+          this.resetLatencyMarks()
+          this.turnStartedAtMs = Date.now()
+          this.sendToClient?.({ type: "turn.started" })
+        }
+        // Flush any accumulated assistant text — user is speaking again
+        if (this.currentAssistantText) {
+          this.transcript.push({ role: "assistant", text: this.currentAssistantText })
+          this.sendToClient?.({
+            type: "transcript.done",
+            text: this.currentAssistantText,
+            role: "assistant",
+          })
+          this.currentAssistantText = ""
+        }
+        this.currentUserText += visibleText
         this.sendToClient?.({
-          type: "transcript.done",
-          text: this.currentAssistantText,
-          role: "assistant",
+          type: "transcript.delta",
+          text: visibleText,
+          role: "user",
         })
-        this.currentAssistantText = ""
       }
-      this.currentUserText += content.inputTranscription.text
-      this.sendToClient?.({
-        type: "transcript.delta",
-        text: content.inputTranscription.text,
-        role: "user",
-      })
     }
 
     // Turn complete — emit latency metrics before turn.ended, then flush
     // accumulated transcriptions (user first, then assistant).
     if (content.turnComplete) {
+      // Any echo we were still expecting is bounded by the turn — clearing
+      // here keeps a stale prefix from suppressing a legitimate next-turn
+      // utterance that happens to share its leading characters.
+      this.injectionEchoBuffer = ""
       this.emitLatencyMetrics()
       if (this.currentUserText) {
         this.transcript.push({ role: "user", text: this.currentUserText })
@@ -1005,6 +1023,31 @@ export class GeminiAdapter implements ProviderAdapter {
     if (this.resumePreamble) {
       log(`[gemini] Resume context folded into systemInstruction: recent=${split.recent.length} turns, summary=${split.summary ? `${split.summary.length} chars` : "none"} (${this.resumePreamble.length} chars)`)
     }
+  }
+
+  /**
+   * Strip the longest leading prefix of `delta` that matches the head of
+   * `injectionEchoBuffer` and drain the buffer by that many characters.
+   * Returns the visible remainder of the delta (empty string when the entire
+   * delta was an echo). Once a delta arrives that doesn't share a prefix
+   * with the pending echo, the buffer is cleared — Gemini either elided the
+   * echo or the user spoke, and we must not suppress real speech that
+   * happens to share a leading character with our stale buffer.
+   */
+  private consumeInjectionEcho(delta: string): string {
+    if (!this.injectionEchoBuffer) return delta
+    let matched = 0
+    const pending = this.injectionEchoBuffer
+    const cap = Math.min(delta.length, pending.length)
+    while (matched < cap && delta.charCodeAt(matched) === pending.charCodeAt(matched)) {
+      matched++
+    }
+    if (matched === 0) {
+      this.injectionEchoBuffer = ""
+      return delta
+    }
+    this.injectionEchoBuffer = pending.slice(matched)
+    return delta.slice(matched)
   }
 
   private flushPendingTranscripts() {
