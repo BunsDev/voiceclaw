@@ -500,15 +500,15 @@ export default function SettingsScreen() {
       <ScrollView testID="settings-scroll" contentContainerStyle={{ padding: 16, gap: 16 }} keyboardDismissMode="on-drag" keyboardShouldPersistTaps="handled">
         <Card testID="voice-pipeline-card" className="gap-4 p-4">
           <View className="gap-1">
-            <Text className="text-lg font-semibold text-foreground">Brain Gateway</Text>
+            <Text className="text-lg font-semibold text-foreground">VoiceClaw Desktop</Text>
             <Text className="text-xs text-muted-foreground">
-              The brain gateway URL and key are the only setup VoiceClaw needs. Point this at your relay server (the one that talks to your brain agent) and the rest of the app will use it.
+              Connect to your VoiceClaw desktop — it runs the model and the tools. Point this at the desktop's address and the app talks to it from there.
             </Text>
           </View>
 
           <>
               <View className="gap-2">
-                <Text className="text-sm text-muted-foreground">Brain Gateway URL</Text>
+                <Text className="text-sm text-muted-foreground">VoiceClaw Desktop URL</Text>
                 <Input
                   placeholder={DEFAULT_REALTIME_SERVER_URL}
                   value={realtimeServerUrl}
@@ -580,8 +580,8 @@ export default function SettingsScreen() {
               <View className="rounded-lg border border-input bg-background/50 p-3 dark:bg-input/20">
                 <Text className="mb-1 text-xs font-medium text-muted-foreground">Setup</Text>
                 <Text className="text-xs leading-5 text-muted-foreground">
-                  1. Run your brain gateway (relay-server): cd relay-server && yarn dev{'\n'}
-                  2. Paste the gateway URL shown on startup into "Brain Gateway URL"{'\n'}
+                  1. Start VoiceClaw on your desktop (it runs the relay){'\n'}
+                  2. Paste the desktop's address into "VoiceClaw Desktop URL"{'\n'}
                   3. Paste the matching API key
                 </Text>
               </View>

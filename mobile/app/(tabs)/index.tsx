@@ -723,7 +723,7 @@ export default function ChatScreen() {
     const serverUrl = (await getSetting('realtime_server_url')) || DEFAULT_REALTIME_SERVER_URL
     const apiKey = await getSetting('realtime_api_key')
     if (!apiKey) {
-      await addMessage(conversationId, 'assistant', 'Configure Brain Gateway URL in Settings to start chatting.')
+      await addMessage(conversationId, 'assistant', 'Configure your VoiceClaw Desktop URL in Settings to start chatting.')
       await loadMessages()
       return
     }
@@ -861,7 +861,7 @@ export default function ChatScreen() {
     const isDebug = debugPref === 'true'
 
     if (!apiKey) {
-      await addMessage(conversationId, 'assistant', 'Please configure your API key in Brain Gateway settings first.')
+      await addMessage(conversationId, 'assistant', 'Please configure your API key in VoiceClaw Desktop settings first.')
       await loadMessages()
       return false
     }
