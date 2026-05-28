@@ -135,12 +135,6 @@ function formatDaySeparator(ts: number, now: number): string {
     + ` ${time}`
 }
 
-function formatBurstSeparator(ts: number, now: number): string {
-  const diffMs = now - ts
-  if (diffMs < 60_000) return 'just now'
-  const diffMin = Math.floor(diffMs / 60_000)
-  if (diffMin < 60) return `${diffMin} min ago`
-  const diffHr = Math.floor(diffMs / 3_600_000)
-  if (diffHr < 6) return `${diffHr} hr ago`
+function formatBurstSeparator(ts: number, _now: number): string {
   return new Date(ts).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
 }

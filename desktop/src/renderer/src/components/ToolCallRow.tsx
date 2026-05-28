@@ -37,14 +37,25 @@ export function ToolCallRow({ entry }: ToolCallRowProps) {
   const errored = status === 'error'
 
   const [responseCollapsed, setResponseCollapsed] = useState(false)
+  const [rowCollapsed, setRowCollapsed] = useState(false)
   const [upstreamExpanded, setUpstreamExpanded] = useState(errored)
   const [elapsed, setElapsed] = useState(0)
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const streamRef = useRef<HTMLDivElement | null>(null)
+  const prevStatusRef = useRef(status)
 
   useEffect(() => {
     if (errored) setUpstreamExpanded(true)
   }, [errored])
+
+  // Auto-collapse when a tool transitions from in-progress to a terminal
+  // state so the transcript isn't dominated by large completed payloads.
+  useEffect(() => {
+    if (prevStatusRef.current === 'in-progress' && status !== 'in-progress') {
+      setRowCollapsed(true)
+    }
+    prevStatusRef.current = status
+  }, [status])
 
   useEffect(() => {
     if (status !== 'in-progress') {
@@ -81,17 +92,43 @@ export function ToolCallRow({ entry }: ToolCallRowProps) {
           borderColor: errored ? 'rgb(220 38 38 / 0.55)' : 'var(--line, hsl(var(--border)))',
         }}
       >
-        <div className="flex items-center justify-between gap-2">
+        <div
+          role="button"
+          tabIndex={0}
+          onClick={() => setRowCollapsed((v) => !v)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault()
+              setRowCollapsed((v) => !v)
+            }
+          }}
+          aria-expanded={!rowCollapsed}
+          className="flex items-center justify-between gap-2 cursor-pointer select-none -mx-1 px-1 py-0.5 rounded hover:bg-foreground/[0.03] transition-colors"
+        >
           <div className="flex items-center gap-2 min-w-0">
+            {rowCollapsed ? (
+              <ChevronRight size={12} className="text-muted-foreground flex-shrink-0" />
+            ) : (
+              <ChevronDown size={12} className="text-muted-foreground flex-shrink-0" />
+            )}
             <StatusIcon status={status} streaming={isStreaming} />
             <code className="font-mono text-[11px] text-foreground/90 truncate">{name}</code>
             {status === 'in-progress' && <ModeBadge streaming={isStreaming} />}
           </div>
-          <span className={`flex-shrink-0 tabular-nums ${statusTextClass(status)}`}>
-            {statusLabel(status)} · {formatMs(displayMs)}
+          <span className={`flex-shrink-0 tabular-nums flex items-center gap-2 ${statusTextClass(status)}`}>
+            <time
+              dateTime={new Date(startedAt).toISOString()}
+              className="text-muted-foreground/70 text-[10px] font-mono"
+              title={new Date(startedAt).toLocaleString()}
+            >
+              {formatClockTime(startedAt)}
+            </time>
+            <span>{statusLabel(status)} · {formatMs(displayMs)}</span>
           </span>
         </div>
 
+        {!rowCollapsed && (
+          <>
         <div className="mt-2">
           <div className="text-[10px] uppercase tracking-wide text-muted-foreground/80 mb-1">
             Parameters
@@ -149,6 +186,8 @@ export function ToolCallRow({ entry }: ToolCallRowProps) {
               </div>
             )}
           </div>
+        )}
+          </>
         )}
       </div>
     </div>
@@ -383,6 +422,15 @@ function statusTextClass(status: ToolCallEntry['status']): string {
 function formatMs(ms: number): string {
   if (ms < 1000) return `${ms}ms`
   return `${(ms / 1000).toFixed(1)}s`
+}
+
+function formatClockTime(ts: number): string {
+  return new Date(ts).toLocaleTimeString(undefined, {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  })
 }
 
 function prettyPrint(raw: string): string {
