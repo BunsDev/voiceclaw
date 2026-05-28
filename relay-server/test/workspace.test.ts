@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeEach, afterEach } from "vitest"
-import { mkdtemp, rm, mkdir, writeFile, symlink, readFile, realpath } from "node:fs/promises"
+import { mkdtemp, rm, mkdir, writeFile, symlink, readFile, realpath, stat } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import {
@@ -13,7 +13,9 @@ import {
   getAgentsMdPath,
   getFactsPath,
   getIdentityPath,
+  getJobsDir,
   getMemoryDir,
+  getSkillsDir,
   getSoulPath,
   getWorkspaceRoot,
   loadRecentMemory,
@@ -28,16 +30,24 @@ import {
 describe("workspace", () => {
   let tmpRoot: string
   let prevEnv: string | undefined
+  let prevDefaults: string | undefined
 
   beforeEach(async () => {
     tmpRoot = await mkdtemp(join(tmpdir(), "voiceclaw-ws-"))
     prevEnv = process.env.VOICECLAW_WORKSPACE
     process.env.VOICECLAW_WORKSPACE = join(tmpRoot, "workspace")
+    prevDefaults = process.env.VOICECLAW_WORKSPACE_DEFAULTS
+    const defaultsRoot = join(tmpRoot, "defaults")
+    await mkdir(join(defaultsRoot, "skills"), { recursive: true })
+    await writeFile(join(defaultsRoot, "skills", "job-application.md"), "# job-application\n", "utf-8")
+    process.env.VOICECLAW_WORKSPACE_DEFAULTS = defaultsRoot
   })
 
   afterEach(async () => {
     if (prevEnv === undefined) delete process.env.VOICECLAW_WORKSPACE
     else process.env.VOICECLAW_WORKSPACE = prevEnv
+    if (prevDefaults === undefined) delete process.env.VOICECLAW_WORKSPACE_DEFAULTS
+    else process.env.VOICECLAW_WORKSPACE_DEFAULTS = prevDefaults
     await rm(tmpRoot, { recursive: true, force: true })
   })
 
@@ -51,6 +61,27 @@ describe("workspace", () => {
       expect(await readFile(getFactsPath(), "utf-8")).toBe(DEFAULT_FACTS_MD)
       const memStat = await readFile(join(getMemoryDir(), ".gitkeep"), "utf-8").catch(() => null)
       expect(memStat).toBeNull()
+    })
+
+    it("creates skills/ and jobs/ and seeds packaged skill playbooks", async () => {
+      await ensureWorkspace()
+      const skillsStat = await stat(getSkillsDir())
+      expect(skillsStat.isDirectory()).toBe(true)
+      const jobsStat = await stat(getJobsDir())
+      expect(jobsStat.isDirectory()).toBe(true)
+      const seeded = await readFile(join(getSkillsDir(), "job-application.md"), "utf-8")
+      expect(seeded).toBe("# job-application\n")
+    })
+
+    it("does not overwrite an existing skill file", async () => {
+      await mkdir(join(tmpRoot, "workspace", "skills"), { recursive: true })
+      await writeFile(join(tmpRoot, "workspace", "skills", "job-application.md"), "custom-skill", "utf-8")
+      await ensureWorkspace()
+      expect(await readFile(join(getSkillsDir(), "job-application.md"), "utf-8")).toBe("custom-skill")
+    })
+
+    it("includes the skills pointer in DEFAULT_AGENTS_MD", () => {
+      expect(DEFAULT_AGENTS_MD).toContain("skills/job-application.md")
     })
 
     it("does not overwrite existing seed files", async () => {

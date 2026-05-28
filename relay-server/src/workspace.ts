@@ -8,6 +8,7 @@
 import { promises as fs, readFileSync, existsSync } from "node:fs"
 import { homedir } from "node:os"
 import { dirname, isAbsolute, join, resolve } from "node:path"
+import { fileURLToPath } from "node:url"
 
 export const DEFAULT_AGENTS_MD = `# Voiceclaw Agent Workspace
 
@@ -51,6 +52,18 @@ factual.
 in FACTS.md. If it's about what happened today, it belongs in today's
 memory file. When in doubt, put it in today's memory — promote it to
 FACTS.md later if it turns out to be durable.
+
+## Skills
+
+Reusable playbooks live under \`skills/\`. Each file is a step-by-step the
+user expects you to follow when its topic comes up. Read the relevant
+playbook in full before you start the work — they are not loaded into your
+context by default. Today's playbooks:
+
+- \`skills/job-application.md\` — reviewing a job posting, drafting a
+  tailored cover letter + tailoring notes, staging artifacts under
+  \`jobs/<slug>/\`, and submitting via the browser. Use this any time
+  the user asks you to look at, prepare, or send a job application.
 
 ## Bash and long-running work
 
@@ -126,14 +139,35 @@ export function getFactsPath(): string {
   return join(getWorkspaceRoot(), "FACTS.md")
 }
 
+export function getSkillsDir(): string {
+  return join(getWorkspaceRoot(), "skills")
+}
+
+export function getJobsDir(): string {
+  return join(getWorkspaceRoot(), "jobs")
+}
+
+// Resolves the packaged skill defaults directory. Sits next to the relay-server
+// source/build, so the path works the same in tsx (running from src/) and from
+// the compiled dist/. Tests can point at a fixtures dir via the env override.
+export function getWorkspaceDefaultsDir(): string {
+  const override = process.env.VOICECLAW_WORKSPACE_DEFAULTS?.trim()
+  if (override) return resolve(override)
+  const here = dirname(fileURLToPath(import.meta.url))
+  return resolve(here, "..", "workspace-defaults")
+}
+
 export async function ensureWorkspace(): Promise<void> {
   const root = getWorkspaceRoot()
   await fs.mkdir(root, { recursive: true })
   await fs.mkdir(getMemoryDir(), { recursive: true })
+  await fs.mkdir(getSkillsDir(), { recursive: true })
+  await fs.mkdir(getJobsDir(), { recursive: true })
   await seedIfMissing(getAgentsMdPath(), DEFAULT_AGENTS_MD)
   await seedIfMissing(getIdentityPath(), DEFAULT_IDENTITY_MD)
   await seedIfMissing(getSoulPath(), DEFAULT_SOUL_MD)
   await seedIfMissing(getFactsPath(), DEFAULT_FACTS_MD)
+  await seedSkillsIfMissing()
 }
 
 async function seedIfMissing(path: string, contents: string): Promise<void> {
@@ -141,6 +175,36 @@ async function seedIfMissing(path: string, contents: string): Promise<void> {
     await fs.access(path)
   } catch {
     await fs.writeFile(path, contents, "utf-8")
+  }
+}
+
+// Copies any `*.md` shipped under `relay-server/workspace-defaults/skills/`
+// into `~/.voiceclaw/workspace/skills/`, skipping files the user has already
+// customized. Mirrors `seedIfMissing` semantics: never overwrite.
+async function seedSkillsIfMissing(): Promise<void> {
+  const defaultsDir = join(getWorkspaceDefaultsDir(), "skills")
+  let entries: string[]
+  try {
+    entries = await fs.readdir(defaultsDir)
+  } catch {
+    return
+  }
+  for (const name of entries) {
+    if (!name.endsWith(".md")) continue
+    const source = join(defaultsDir, name)
+    const dest = join(getSkillsDir(), name)
+    try {
+      await fs.access(dest)
+      continue
+    } catch {
+      // not present — copy
+    }
+    try {
+      const contents = await fs.readFile(source, "utf-8")
+      await fs.writeFile(dest, contents, "utf-8")
+    } catch {
+      // best-effort — a missing default shouldn't break session startup
+    }
   }
 }
 
