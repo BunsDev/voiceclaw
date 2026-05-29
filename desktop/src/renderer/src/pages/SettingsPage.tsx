@@ -1091,19 +1091,6 @@ export function SettingsPage() {
           </div>
         </Card>
 
-        {/* Setup Instructions */}
-        <Card className="p-4 space-y-2 text-xs text-muted-foreground">
-          <p className="font-medium">Setup</p>
-          <p>The relay server runs automatically inside VoiceClaw. The active URL is <code className="rounded bg-muted px-1 py-0.5">{serverUrlPlaceholder}</code> — leave the field above blank to use it. Set a custom URL only if you want to point at an external relay.</p>
-          <details className="pt-1">
-            <summary className="cursor-pointer">Developers: run the relay from source</summary>
-            <ol className="list-decimal list-inside space-y-0.5 pt-1">
-              <li>From the repo root: <code className="rounded bg-muted px-1 py-0.5">cd relay-server && yarn dev</code></li>
-              <li>Paste the printed URL into the field above</li>
-              <li>Click Test to verify the connection</li>
-            </ol>
-          </details>
-        </Card>
 
       </div>
     </div>
