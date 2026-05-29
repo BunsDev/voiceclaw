@@ -129,4 +129,38 @@ describe("edit tool", () => {
     if ("error" in result) throw new Error(result.error)
     expect(result.path).toBe(join(await realpath(getWorkspaceRoot()), "p.txt"))
   })
+
+  describe("symlink TOCTOU protection", () => {
+    it("refuses to edit through a leaf symlink that points outside the workspace", async () => {
+      const outside = join(tmpRoot, "outside.txt")
+      await writeFile(outside, "secret-outside\n", "utf-8")
+      const link = join(getWorkspaceRoot(), "linked.txt")
+      const { symlink } = await import("node:fs/promises")
+      await symlink(outside, link)
+
+      const result = await runEdit({
+        path: "linked.txt",
+        old_string: "secret-outside",
+        new_string: "PWNED",
+      })
+      expect("error" in result).toBe(true)
+      expect(await readFile(outside, "utf-8")).toBe("secret-outside\n")
+    })
+
+    it("refuses to edit through a leaf symlink even when it points inside the workspace", async () => {
+      const inside = join(getWorkspaceRoot(), "real.txt")
+      await writeFile(inside, "real\n", "utf-8")
+      const link = join(getWorkspaceRoot(), "link.txt")
+      const { symlink } = await import("node:fs/promises")
+      await symlink(inside, link)
+
+      const result = await runEdit({
+        path: "link.txt",
+        old_string: "real",
+        new_string: "fake",
+      })
+      expect("error" in result).toBe(true)
+      expect(await readFile(inside, "utf-8")).toBe("real\n")
+    })
+  })
 })

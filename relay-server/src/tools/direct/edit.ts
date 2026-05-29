@@ -8,8 +8,8 @@
 //   - Empty old_string is rejected (cannot anchor a replacement).
 //   - Trailing newline behavior is preserved naturally by string-replace.
 
-import { promises as fs } from "node:fs"
-import { isAbsolute, join } from "node:path"
+import { promises as fs, constants as fsConstants } from "node:fs"
+import { isAbsolute, join, resolve } from "node:path"
 import {
   getWorkspaceRoot,
   resolveInsideWorkspace,
@@ -85,19 +85,46 @@ export async function runEdit(args: EditArgs): Promise<EditResult | EditError> {
   }
   const replaceAll = args.replace_all === true
 
+  const root = getWorkspaceRoot()
   const candidate = isAbsolute(args.path)
-    ? args.path
-    : join(getWorkspaceRoot(), args.path)
+    ? resolve(args.path)
+    : resolve(join(root, args.path))
+  if (!isLexicallyInside(candidate, root)) {
+    return { error: `path escapes workspace: ${candidate} not inside ${root}` }
+  }
 
   const resolved = await resolveInsideWorkspace(candidate, { allowMissingFile: false })
   if (!resolved.ok || !resolved.resolved) {
     return { error: resolved.reason ?? "path resolution failed" }
   }
 
+  // Reject leaf symlinks before reading/writing so an existing symlink that
+  // currently points inside the workspace can't be re-pointed elsewhere
+  // between the realpath check and the open.
+  try {
+    const leafStat = await fs.lstat(candidate)
+    if (leafStat.isSymbolicLink()) {
+      return { error: `refusing to edit through symlink: ${candidate}` }
+    }
+  } catch (err) {
+    return { error: `lstat failed: ${(err as Error).message}` }
+  }
+
   let original: string
   try {
-    original = await fs.readFile(resolved.resolved, "utf-8")
+    // O_NOFOLLOW on the read fails (ELOOP) if the leaf is suddenly a symlink.
+    const readFlags = fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW
+    const handle = await fs.open(resolved.resolved, readFlags)
+    try {
+      original = await handle.readFile("utf-8")
+    } finally {
+      await handle.close().catch(() => undefined)
+    }
   } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code
+    if (code === "ELOOP" || code === "EMLINK") {
+      return { error: `refusing to edit through symlink: ${resolved.resolved}` }
+    }
     return { error: `read failed: ${(err as Error).message}` }
   }
 
@@ -129,8 +156,20 @@ export async function runEdit(args: EditArgs): Promise<EditResult | EditError> {
   }
 
   try {
-    await fs.writeFile(resolved.resolved, updated, "utf-8")
+    // O_NOFOLLOW + O_TRUNC: if a symlink raced into place between the read and
+    // here, the open fails with ELOOP — we never write through it.
+    const writeFlags = fsConstants.O_WRONLY | fsConstants.O_TRUNC | fsConstants.O_NOFOLLOW
+    const handle = await fs.open(resolved.resolved, writeFlags)
+    try {
+      await handle.writeFile(updated, "utf-8")
+    } finally {
+      await handle.close().catch(() => undefined)
+    }
   } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code
+    if (code === "ELOOP" || code === "EMLINK") {
+      return { error: `refusing to edit through symlink: ${resolved.resolved}` }
+    }
     return { error: `write failed: ${(err as Error).message}` }
   }
 
@@ -138,7 +177,13 @@ export async function runEdit(args: EditArgs): Promise<EditResult | EditError> {
   if (!verify.ok) {
     // Restore. We have the original in memory.
     try {
-      await fs.writeFile(resolved.resolved, original, "utf-8")
+      const writeFlags = fsConstants.O_WRONLY | fsConstants.O_TRUNC | fsConstants.O_NOFOLLOW
+      const handle = await fs.open(resolved.resolved, writeFlags)
+      try {
+        await handle.writeFile(original, "utf-8")
+      } finally {
+        await handle.close().catch(() => undefined)
+      }
     } catch {
       // best-effort restore
     }
@@ -150,6 +195,14 @@ export async function runEdit(args: EditArgs): Promise<EditResult | EditError> {
     path: resolved.resolved,
     bytes: Buffer.byteLength(updated, "utf-8"),
   }
+}
+
+function isLexicallyInside(candidate: string, root: string): boolean {
+  const resolvedCandidate = resolve(candidate)
+  const resolvedRoot = resolve(root)
+  if (resolvedCandidate === resolvedRoot) return true
+  const rootWithSep = resolvedRoot.endsWith("/") ? resolvedRoot : `${resolvedRoot}/`
+  return resolvedCandidate.startsWith(rootWithSep)
 }
 
 function countOccurrences(haystack: string, needle: string): number {

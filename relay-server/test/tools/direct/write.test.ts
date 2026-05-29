@@ -87,4 +87,44 @@ describe("write tool", () => {
     if ("error" in result) throw new Error(result.error)
     expect(result.path).toBe(join(await realpath(getWorkspaceRoot()), "canonical.txt"))
   })
+
+  describe("symlink TOCTOU protection", () => {
+    it("refuses to write through a leaf symlink that points outside the workspace", async () => {
+      const outside = join(tmpRoot, "outside.txt")
+      await writeFile(outside, "original-outside\n", "utf-8")
+      const link = join(getWorkspaceRoot(), "linked.txt")
+      const { symlink } = await import("node:fs/promises")
+      await symlink(outside, link)
+
+      const result = await runWrite({ path: "linked.txt", content: "PWNED" })
+      expect("error" in result).toBe(true)
+      // The outside target must NOT be overwritten.
+      const outsideAfter = await readFile(outside, "utf-8")
+      expect(outsideAfter).toBe("original-outside\n")
+    })
+
+    it("refuses to write through a leaf symlink even when it points inside the workspace", async () => {
+      // A leaf symlink anywhere is rejected — there's no good reason to write
+      // through one, and it's the same lstat code path that protects against
+      // outside-pointing links.
+      const inside = join(getWorkspaceRoot(), "real.txt")
+      await writeFile(inside, "real\n", "utf-8")
+      const link = join(getWorkspaceRoot(), "link.txt")
+      const { symlink } = await import("node:fs/promises")
+      await symlink(inside, link)
+
+      const result = await runWrite({ path: "link.txt", content: "should-fail" })
+      expect("error" in result).toBe(true)
+      // The link target must NOT be overwritten.
+      expect(await readFile(inside, "utf-8")).toBe("real\n")
+    })
+
+    it("rejects ../../ traversal before any mkdir lands on disk", async () => {
+      const escape = join(tmpRoot, "fresh", "escaped.txt")
+      const result = await runWrite({ path: "../fresh/escaped.txt", content: "nope" })
+      expect("error" in result).toBe(true)
+      // The parent dir must not have been created by mkdir -p.
+      await expect(readFile(escape, "utf-8")).rejects.toThrow()
+    })
+  })
 })

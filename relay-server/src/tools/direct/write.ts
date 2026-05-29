@@ -1,11 +1,11 @@
 // `write` direct tool — writes content to a file inside the voiceclaw workspace.
 //
-// Workspace-scoped: rejects paths outside `~/.voiceclaw/workspace/` and
-// re-verifies the realpath after the write so a freshly-installed escaping
-// symlink can't shuttle the payload elsewhere.
+// Workspace-scoped: rejects paths outside `~/.voiceclaw/workspace/`. The final
+// open uses O_NOFOLLOW so a freshly-installed leaf symlink cannot redirect the
+// write to an outside target between the containment check and the open.
 
-import { promises as fs } from "node:fs"
-import { dirname, isAbsolute, join } from "node:path"
+import { promises as fs, constants as fsConstants } from "node:fs"
+import { dirname, isAbsolute, join, resolve } from "node:path"
 import {
   getWorkspaceRoot,
   resolveInsideWorkspace,
@@ -61,10 +61,19 @@ export async function runWrite(args: WriteArgs): Promise<WriteResult | WriteErro
     return { error: "content must be a string" }
   }
 
+  const root = getWorkspaceRoot()
+  // Resolve the candidate lexically against the workspace root FIRST. This
+  // catches "../../tmp/evil" before any mkdir or open touches disk.
   const candidate = isAbsolute(args.path)
-    ? args.path
-    : join(getWorkspaceRoot(), args.path)
+    ? resolve(args.path)
+    : resolve(join(root, args.path))
+  if (!isLexicallyInside(candidate, root)) {
+    return { error: `path escapes workspace: ${candidate} not inside ${root}` }
+  }
   const candidateParent = dirname(candidate)
+  if (!isLexicallyInside(candidateParent, root)) {
+    return { error: `parent escapes workspace: ${candidateParent} not inside ${root}` }
+  }
 
   // For absolute paths, refuse to create parents that don't already exist —
   // we can't safely mkdir into territory we haven't proven is inside the
@@ -89,10 +98,44 @@ export async function runWrite(args: WriteArgs): Promise<WriteResult | WriteErro
     return { error: resolved.reason ?? "path resolution failed" }
   }
 
+  // Reject leaf symlinks BEFORE writing — refuse to follow a freshly-installed
+  // symlink to anywhere (even inside the workspace). Combined with the
+  // O_NOFOLLOW open below, this closes the TOCTOU window between resolve and
+  // write where a symlink swap could redirect content elsewhere.
   try {
-    await fs.writeFile(resolved.resolved, args.content, "utf-8")
+    const leafStat = await fs.lstat(resolved.resolved)
+    if (leafStat.isSymbolicLink()) {
+      return { error: `refusing to write through symlink: ${resolved.resolved}` }
+    }
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code
+    if (code !== "ENOENT") {
+      return { error: `lstat failed: ${(err as Error).message}` }
+    }
+    // ENOENT means leaf doesn't exist yet — that's the create case.
+  }
+
+  // O_NOFOLLOW on the leaf: if a symlink races into place between lstat and
+  // open, the open fails with ELOOP. O_CREAT | O_TRUNC | O_WRONLY mirrors the
+  // semantics of writeFile.
+  const flags = fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_TRUNC | fsConstants.O_NOFOLLOW
+  let handle: fs.FileHandle
+  try {
+    handle = await fs.open(resolved.resolved, flags, 0o600)
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code
+    if (code === "ELOOP" || code === "EMLINK") {
+      return { error: `refusing to write through symlink: ${resolved.resolved}` }
+    }
+    return { error: `open failed: ${(err as Error).message}` }
+  }
+
+  try {
+    await handle.writeFile(args.content, "utf-8")
   } catch (err) {
     return { error: `write failed: ${(err as Error).message}` }
+  } finally {
+    await handle.close().catch(() => undefined)
   }
 
   const verify = await verifyWrittenPathInside(resolved.resolved)
@@ -110,4 +153,12 @@ export async function runWrite(args: WriteArgs): Promise<WriteResult | WriteErro
     bytes: Buffer.byteLength(args.content, "utf-8"),
     path: resolved.resolved,
   }
+}
+
+function isLexicallyInside(candidate: string, root: string): boolean {
+  const resolvedCandidate = resolve(candidate)
+  const resolvedRoot = resolve(root)
+  if (resolvedCandidate === resolvedRoot) return true
+  const rootWithSep = resolvedRoot.endsWith("/") ? resolvedRoot : `${resolvedRoot}/`
+  return resolvedCandidate.startsWith(rootWithSep)
 }
