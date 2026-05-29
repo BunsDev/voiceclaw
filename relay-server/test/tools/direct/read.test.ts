@@ -1,8 +1,8 @@
 import { describe, expect, it, beforeEach, afterEach } from "vitest"
 import { mkdtemp, rm, writeFile, mkdir } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
-import { runRead } from "../../../src/tools/direct/read.js"
+import { runRead, checkReadablePath } from "../../../src/tools/direct/read.js"
 
 describe("read tool", () => {
   let tmpRoot: string
@@ -100,5 +100,77 @@ describe("read tool", () => {
   it("rejects an empty path", async () => {
     const result = await runRead({ path: "" })
     expect("error" in result).toBe(true)
+  })
+
+  describe("sensitive-path guard", () => {
+    const home = homedir()
+
+    it("blocks ~/.ssh/* anywhere on path", () => {
+      expect(checkReadablePath(join(home, ".ssh", "id_rsa")).ok).toBe(false)
+      expect(checkReadablePath("/Users/anyone/.ssh/config").ok).toBe(false)
+    })
+
+    it("blocks ~/.aws / ~/.gnupg / ~/.kube / ~/.docker", () => {
+      expect(checkReadablePath(join(home, ".aws", "credentials")).ok).toBe(false)
+      expect(checkReadablePath(join(home, ".gnupg", "privkeys.kbx")).ok).toBe(false)
+      expect(checkReadablePath(join(home, ".kube", "config")).ok).toBe(false)
+      expect(checkReadablePath(join(home, ".docker", "config.json")).ok).toBe(false)
+    })
+
+    it("blocks ~/.config/{gh,op,gcloud,1password,doctl}", () => {
+      expect(checkReadablePath(join(home, ".config", "gh", "hosts.yml")).ok).toBe(false)
+      expect(checkReadablePath(join(home, ".config", "op", "config")).ok).toBe(false)
+      expect(checkReadablePath(join(home, ".config", "gcloud", "credentials.db")).ok).toBe(false)
+      expect(checkReadablePath(join(home, ".config", "1password", "config")).ok).toBe(false)
+      expect(checkReadablePath(join(home, ".config", "doctl", "config.yaml")).ok).toBe(false)
+    })
+
+    it("allows ~/.config for other tools (only known credential dirs are blocked)", () => {
+      expect(checkReadablePath(join(home, ".config", "nvim", "init.lua")).ok).toBe(true)
+    })
+
+    it("blocks .env files anywhere", () => {
+      expect(checkReadablePath("/tmp/.env").ok).toBe(false)
+      expect(checkReadablePath("/tmp/.env.local").ok).toBe(false)
+      expect(checkReadablePath("/Users/me/projects/foo/.env.production").ok).toBe(false)
+      // exact match on .env
+      expect(checkReadablePath("/var/.env").ok).toBe(false)
+    })
+
+    it("blocks PEM / KEY / PFX / P12 / ASC suffixes", () => {
+      expect(checkReadablePath("/tmp/cert.pem").ok).toBe(false)
+      expect(checkReadablePath("/tmp/id_rsa.key").ok).toBe(false)
+      expect(checkReadablePath("/tmp/server.pfx").ok).toBe(false)
+      expect(checkReadablePath("/tmp/store.p12").ok).toBe(false)
+      expect(checkReadablePath("/tmp/sig.asc").ok).toBe(false)
+    })
+
+    it("blocks the VoiceClaw config dir but allows the workspace inside it", () => {
+      // ~/.voiceclaw (excluding the workspace subdir) is off limits
+      const voiceclawCfg = join(home, ".voiceclaw", "data.db")
+      expect(checkReadablePath(voiceclawCfg).ok).toBe(false)
+      // The workspace lives under VOICECLAW_WORKSPACE (set in beforeEach to
+      // tmpRoot/workspace) so any path inside it is allowed.
+      const wsFile = join(process.env.VOICECLAW_WORKSPACE!, "notes.md")
+      expect(checkReadablePath(wsFile).ok).toBe(true)
+    })
+
+    it("blocks system credential files", () => {
+      expect(checkReadablePath("/etc/shadow").ok).toBe(false)
+      expect(checkReadablePath("/etc/sudoers").ok).toBe(false)
+    })
+
+    it("allows ordinary code/log paths", () => {
+      expect(checkReadablePath("/tmp/build.log").ok).toBe(true)
+      expect(checkReadablePath("/Users/me/projects/foo/package.json").ok).toBe(true)
+      expect(checkReadablePath("/var/log/system.log").ok).toBe(true)
+    })
+
+    it("runRead surfaces guard error for blocked path", async () => {
+      const blocked = join(home, ".ssh", "id_rsa")
+      const result = await runRead({ path: blocked })
+      expect("error" in result).toBe(true)
+      expect((result as { error: string }).error).toMatch(/credential/i)
+    })
   })
 })

@@ -5,7 +5,8 @@
 // line-number + tab prefix, per-line and total caps.
 
 import { promises as fs } from "node:fs"
-import { isAbsolute, resolve } from "node:path"
+import { homedir } from "node:os"
+import { isAbsolute, resolve, basename } from "node:path"
 import { getWorkspaceRoot } from "../../workspace.js"
 
 export const READ_TOOL_NAME = "read"
@@ -71,6 +72,11 @@ export async function runRead(args: ReadArgs): Promise<ReadResult | ReadError> {
 
   const absPath = isAbsolute(rawPath) ? rawPath : resolve(getWorkspaceRoot(), rawPath)
 
+  const guard = checkReadablePath(absPath)
+  if (!guard.ok) {
+    return { error: guard.reason }
+  }
+
   let raw: string
   try {
     raw = await fs.readFile(absPath, "utf-8")
@@ -126,4 +132,86 @@ export async function runRead(args: ReadArgs): Promise<ReadResult | ReadError> {
   }
 
   return { content: out, truncated, totalLines, bytesReturned }
+}
+
+// Sensitive-path guard. read is intentionally allowed anywhere on disk so the
+// model can answer "what's in package.json", "tail this log", etc — but it
+// must not become a trivial credential exfiltration tool. The guard rejects:
+//   - credential dirs anywhere on the path (.ssh, .aws, .gnupg, .config/gh,
+//     .config/op, gcloud, kube)
+//   - .env files (any name ending in .env, .env.local, .env.production, ...)
+//   - private key / pem / pfx files (suffix match)
+//   - the relay's own voiceclaw config dir (~/.voiceclaw outside the workspace
+//     itself — settings DB, provider-keys, RELAY_API_KEY all live there)
+//
+// This is a backstop, not a substitute for upstream auth. A determined
+// attacker with a shell session has many other paths to credentials; we just
+// don't want a single `read` call to be the easy one.
+export interface ReadCheck { ok: true }
+export interface ReadDenied { ok: false, reason: string }
+export type ReadCheckResult = ReadCheck | ReadDenied
+
+export function checkReadablePath(absPath: string): ReadCheckResult {
+  const home = homedir()
+  const normalized = resolve(absPath)
+  const lower = normalized.toLowerCase()
+
+  // Workspace itself is always readable. Path INSIDE the user's workspace
+  // never trips the .voiceclaw guard below, even though the workspace lives
+  // under ~/.voiceclaw/workspace by default.
+  const workspaceRoot = resolve(getWorkspaceRoot())
+  if (normalized === workspaceRoot || normalized.startsWith(workspaceRoot + "/")) {
+    return { ok: true }
+  }
+
+  // Filename-only denials (apply anywhere on disk).
+  const leaf = basename(normalized)
+  if (leaf === ".env" || leaf.startsWith(".env.") || leaf.endsWith(".env")) {
+    return { ok: false, reason: `refusing to read environment file: ${normalized}` }
+  }
+  const suffixDenied = [".pem", ".key", ".pfx", ".p12", ".asc"]
+  for (const s of suffixDenied) {
+    if (lower.endsWith(s)) {
+      return { ok: false, reason: `refusing to read secret file: ${normalized}` }
+    }
+  }
+
+  // Path-component denials (apply if any segment matches).
+  const segments = normalized.split("/")
+  const denyComponents = new Set([
+    ".ssh", ".aws", ".gnupg", ".kube", ".docker",
+  ])
+  for (const seg of segments) {
+    if (denyComponents.has(seg)) {
+      return { ok: false, reason: `refusing to read credential path component: ${seg}` }
+    }
+  }
+
+  // .config/<tool> for known credential-holding tools.
+  const configIdx = segments.indexOf(".config")
+  if (configIdx !== -1 && configIdx + 1 < segments.length) {
+    const tool = segments[configIdx + 1]
+    if (tool === "gh" || tool === "op" || tool === "gcloud" || tool === "1password" || tool === "doctl") {
+      return { ok: false, reason: `refusing to read credential path: .config/${tool}` }
+    }
+  }
+
+  // VoiceClaw's own secrets — settings DB, provider keys, relay key — live in
+  // ~/.voiceclaw (NOT inside ~/.voiceclaw/workspace). The workspace check
+  // above passes through workspace reads first; everything else under
+  // ~/.voiceclaw is off-limits.
+  const voiceclawDir = resolve(home, ".voiceclaw")
+  if (normalized === voiceclawDir || normalized.startsWith(voiceclawDir + "/")) {
+    return { ok: false, reason: `refusing to read VoiceClaw config dir: ${normalized}` }
+  }
+
+  // Common system credential stores.
+  if (lower.includes("/keychain")) {
+    return { ok: false, reason: `refusing to read keychain path: ${normalized}` }
+  }
+  if (normalized === "/etc/shadow" || normalized === "/etc/sudoers") {
+    return { ok: false, reason: `refusing to read system credential file: ${normalized}` }
+  }
+
+  return { ok: true }
 }
