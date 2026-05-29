@@ -458,6 +458,8 @@ export function ChatPage({ onNavigateToSettings }: ChatPageProps = {}) {
     const tracingEnabled = (await getSetting('tracing_enabled')) === 'true'
     const inputDeviceId = (await getSetting('input_device_id')) || undefined
     const outputDeviceId = (await getSetting('output_device_id')) || undefined
+    const voiceMode = normalizeVoiceMode(await getSetting('voice_mode'))
+    const agentBackend = normalizeAgentBackend(await getSetting('agent_backend'))
 
     const convId = conversationIdRef.current
     const conversationHistory = convId
@@ -489,6 +491,8 @@ export function ChatPage({ onNavigateToSettings }: ChatPageProps = {}) {
       },
       conversationHistory: conversationHistory.length > 0 ? conversationHistory : undefined,
       tracingEnabled,
+      voiceMode,
+      agentBackend,
     })
   }, [realtime, outputGain])
 
@@ -637,6 +641,8 @@ export function ChatPage({ onNavigateToSettings }: ChatPageProps = {}) {
     const tavilyApiKey = tavilyEnabled
       ? ((await getSetting('tavily_api_key')) || undefined)
       : undefined
+    const voiceMode = normalizeVoiceMode(await getSetting('voice_mode'))
+    const agentBackend = normalizeAgentBackend(await getSetting('agent_backend'))
     const recent = (await getMessages(convId))
       .filter((m) => m.role === 'user' || m.role === 'assistant')
       .slice(-20, -1)
@@ -662,6 +668,8 @@ export function ChatPage({ onNavigateToSettings }: ChatPageProps = {}) {
       images: attachmentsToSend.length > 0
         ? attachmentsToSend.map((p) => ({ base64: p.base64, mimeType: p.mime }))
         : undefined,
+      voiceMode,
+      agentBackend,
     }, {
       onToken: (full) => {
         setIsThinking(false)
@@ -1435,6 +1443,26 @@ function normalizeRealtimeModel(model: string | null): typeof REALTIME_MODELS[nu
   return (REALTIME_MODELS as readonly string[]).includes(model ?? '')
     ? model as typeof REALTIME_MODELS[number]
     : DEFAULT_REALTIME_MODEL
+}
+
+const VOICE_MODES = ['direct', 'operator', 'supervisor'] as const
+type VoiceMode = typeof VOICE_MODES[number]
+const DEFAULT_VOICE_MODE: VoiceMode = 'direct'
+
+function normalizeVoiceMode(value: string | null): VoiceMode {
+  return (VOICE_MODES as readonly string[]).includes(value ?? '')
+    ? (value as VoiceMode)
+    : DEFAULT_VOICE_MODE
+}
+
+const AGENT_BACKENDS = ['pi', 'openai', 'hermes'] as const
+type AgentBackend = typeof AGENT_BACKENDS[number]
+const DEFAULT_AGENT_BACKEND: AgentBackend = 'pi'
+
+function normalizeAgentBackend(value: string | null): AgentBackend {
+  return (AGENT_BACKENDS as readonly string[]).includes(value ?? '')
+    ? (value as AgentBackend)
+    : DEFAULT_AGENT_BACKEND
 }
 
 function hasFilePayload(e: DragEvent<HTMLDivElement>): boolean {

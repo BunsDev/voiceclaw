@@ -4,6 +4,7 @@
 
 import { createHash } from "node:crypto"
 import type { SessionConfigEvent } from "./types.js"
+import { effectiveVoiceMode } from "./tools/index.js"
 import {
   loadRecentMemorySync,
   readAgentsMdSync,
@@ -60,14 +61,54 @@ You have direct tools on the user's machine. No brain hop, no out-of-process age
 **For tasks longer than ~2 minutes** (big builds, long delegations, scrapes), call \`bash\` with \`background:true\`. You'll get a \`jobId\` + \`logPath\` back immediately so the conversation keeps moving; use the \`read\` tool on that log later to check progress. A trailing \`[task-exit N]\` line means the job finished.
 `.trim()
 
+// Operator-mode preamble — re-introduces the classic ask_brain delegation
+// pattern. The realtime model's job is to talk to the user and hand work off
+// to the brain agent (an out-of-process agent running locally). This is the
+// pre-direct-tools behavior, gated behind voiceMode === "operator".
+const BRAIN_INTRO = `
+## Your brain agent
+
+You're paired with a brain agent that handles real work on the user's behalf — memory, calendar, tasks, files, web access, anything that needs more than a quick answer. You don't do that work yourself. You talk to the user and you delegate to \`ask_brain\`.
+
+- Use \`ask_brain\` for anything personal (calendar, tasks, memory, files) and for anything that needs multi-step research, analysis, or actions.
+- Use \`web_search\` for quick public-web facts where ask_brain would be overkill.
+- Send full questions to \`ask_brain\` — don't pre-summarize what you think the user wants. Include URLs the user shared verbatim.
+`.trim()
+
+const BRAIN_ASYNC = `
+## How ask_brain returns
+
+\`ask_brain\` is slow (a few seconds, sometimes longer). It runs out of process:
+
+1. You call it and get an immediate "searching" placeholder. Say a short verbal bridge: "Looking into it..." / "One sec, checking..."
+2. The real answer lands later as injected context that begins with \`[Brain agent result for query: "..."]\`. When you see that, speak it naturally to the user.
+3. If the bridge said "I'll get back to you", actually circle back when the result arrives — don't let it die in the buffer.
+4. If you see \`[Brain agent failed for query: "..."]\`, tell the user the lookup didn't work and offer to try again.
+`.trim()
+
+const BRAIN_MEMORY = `
+## Memory
+
+The brain agent owns persistent memory. To remember something durable ("I prefer X", "I decided Y"), call \`ask_brain\` with a memory instruction — e.g. "Please remember that I switched to a standing desk." Don't try to manage memory yourself.
+`.trim()
+
 export function buildInstructions(config: SessionConfigEvent): string {
   const parts: string[] = []
+  const mode = effectiveVoiceMode(config)
 
   const identity = loadAgentIdentity(config.provider)
   log(`[instructions] Loaded agent identity (${identity.length} chars): ${identity.substring(0, 100)}...`)
   parts.push(identity)
 
-  parts.push(DIRECT_TOOLS_PREAMBLE)
+  if (mode === "operator") {
+    parts.push(BRAIN_INTRO)
+    parts.push(BRAIN_ASYNC)
+    parts.push(BRAIN_MEMORY)
+  } else {
+    // "direct" and "supervisor" (scaffold fallback) both use the direct
+    // preamble since supervisor currently behaves like direct at runtime.
+    parts.push(DIRECT_TOOLS_PREAMBLE)
+  }
   parts.push(buildWorkspaceContextSection())
 
   parts.push(CONVERSATION_RULES)

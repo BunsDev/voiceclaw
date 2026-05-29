@@ -11,7 +11,10 @@ import type {
 } from "./types.js"
 import type { ProviderAdapter, SendToClient } from "./adapters/types.js"
 import { createAdapter } from "./adapters/index.js"
-import { executeSyncTool, findRelayTool, getGeminiTools, getRelayTools, isBlockingLatencyClass, resolveTavilyKey } from "./tools/index.js"
+import { effectiveVoiceMode, executeSyncTool, findRelayTool, getGeminiTools, getRelayTools, isBlockingLatencyClass, resolveTavilyKey } from "./tools/index.js"
+import { logAgentBackendSelection } from "./agents.js"
+import { noteSupervisorSelected } from "./supervisor.js"
+import { resolveAgentBackend, resolveVoiceMode } from "./types.js"
 import { askBrain } from "./tools/brain.js"
 import { webSearch } from "./tools/web-search.js"
 import { runRead, READ_TOOL_NAME } from "./tools/direct/read.js"
@@ -1081,7 +1084,20 @@ export class RelaySession {
       void touchDeviceToken(credential.deviceId)
     }
 
-    log(`[session:${this.id}] Auth passed, creating ${config.provider} adapter (model=${config.model || "default"})`)
+    const requestedMode = resolveVoiceMode(config.voiceMode)
+    const runtimeMode = effectiveVoiceMode(config)
+    const backend = resolveAgentBackend(config.agentBackend)
+    log(`[session:${this.id}] Auth passed, creating ${config.provider} adapter (model=${config.model || "default"}, voiceMode=${requestedMode}${runtimeMode !== requestedMode ? ` →${runtimeMode}` : ""}, agentBackend=${backend})`)
+    if (requestedMode === "supervisor") {
+      noteSupervisorSelected(this.id, backend)
+    }
+    if (runtimeMode === "operator") {
+      // Operator mode currently routes ask_brain through the existing openclaw
+      // gateway regardless of which backend is selected. Logged here so the
+      // selection is visible in traces; the real per-backend wiring lives in
+      // agents.ts as a TODO.
+      logAgentBackendSelection(this.id, backend)
+    }
     this.config = config
     // Reset direct mode state on every session.config so a second config
     // doesn't carry a stale tavily key from a prior session.prep.

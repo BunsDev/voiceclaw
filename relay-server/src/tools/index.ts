@@ -1,10 +1,18 @@
 // Tool definitions for STS sessions
-// echo_tool for testing, web_search for fast Tavily-backed lookups (only when
-// a Tavily key is set), plus the direct tools (read/write/edit/bash) that are
-// always advertised — the `experimentalDirectTools` config flag is no longer a
-// gate, it's accepted for wire-compat only.
+//
+// The advertised tool set depends on voiceMode (see types.ts):
+//   - "direct"     — read/write/edit/bash (+ web_search if Tavily key set).
+//                    The model uses tools itself in-line.
+//   - "operator"   — ask_brain (+ web_search if Tavily key set). The realtime
+//                    model delegates work to the agent backend; the direct
+//                    tools are NOT advertised.
+//   - "supervisor" — SCAFFOLD: falls back to "direct" until real supervision
+//                    is wired (see ../supervisor.ts).
+//
+// `experimentalDirectTools` is the legacy gate and is accepted for
+// wire-compat only.
 
-import type { SessionConfigEvent } from "../types.js"
+import { resolveVoiceMode, type SessionConfigEvent, type VoiceMode } from "../types.js"
 import {
   READ_TOOL_DESCRIPTION,
   READ_TOOL_NAME,
@@ -133,17 +141,37 @@ const BASH_TOOL: RelayToolDefinition = {
 
 export function getRelayTools(config: SessionConfigEvent): RelayToolDefinition[] {
   const tools: RelayToolDefinition[] = [ECHO_TOOL]
+  const mode = effectiveVoiceMode(config)
 
-  tools.push(READ_TOOL)
-  tools.push(WRITE_TOOL)
-  tools.push(EDIT_TOOL)
-  tools.push(BASH_TOOL)
+  if (mode === "operator") {
+    tools.push(ASK_BRAIN)
+  } else {
+    // "direct" and "supervisor" (scaffold fallback) both advertise the direct
+    // toolset.
+    tools.push(READ_TOOL)
+    tools.push(WRITE_TOOL)
+    tools.push(EDIT_TOOL)
+    tools.push(BASH_TOOL)
+  }
 
   if (resolveTavilyKey(config)) {
     tools.push(WEB_SEARCH)
   }
 
   return tools
+}
+
+// Resolve the voiceMode the runtime will actually behave as. Supervisor is a
+// SCAFFOLD: it is accepted on the wire but currently behaves like Direct.
+// Routed through one helper so the fallback is in exactly one place when the
+// real supervisor lands.
+export function effectiveVoiceMode(config: SessionConfigEvent): VoiceMode {
+  const requested = resolveVoiceMode(config.voiceMode)
+  if (requested === "supervisor") {
+    // SCAFFOLD: supervisor mode not yet implemented — falls back to direct behavior.
+    return "direct"
+  }
+  return requested
 }
 
 // True when at least one tool the model can call returns its result via the

@@ -54,6 +54,45 @@ export interface SessionConfigEvent {
   // advertised; this field is accepted for wire-compat but no longer gates
   // anything. Kept so older clients can still send it without error.
   experimentalDirectTools?: boolean
+  // How the realtime voice model gets its capabilities.
+  //   - "direct"     (default) — relay advertises read/write/edit/bash +
+  //                  web_search; the model uses them directly.
+  //   - "operator"   — relay advertises ask_brain (+ web_search) instead and
+  //                  delegates multi-step work to the agent backend selected
+  //                  by agentBackend.
+  //   - "supervisor" — SCAFFOLD: a supervisor agent monitors and steers the
+  //                  live conversation. Not yet implemented; runtime falls
+  //                  back to "direct" behavior.
+  voiceMode?: VoiceMode
+  // Which host-side agent backs operator/supervisor mode. Peer dependency:
+  // the relay assumes the user has the corresponding CLI installed locally.
+  // SCAFFOLD: the wire field is honored and logged, but the per-backend host
+  // invocation (pi-mono / codex / hermes) is not yet wired in — operator mode
+  // currently routes through the existing openclaw/brain gateway regardless
+  // of the value here. See relay-server/src/agents.ts.
+  agentBackend?: AgentBackend
+}
+
+export type VoiceMode = "direct" | "operator" | "supervisor"
+export const DEFAULT_VOICE_MODE: VoiceMode = "direct"
+export const VOICE_MODES: readonly VoiceMode[] = ["direct", "operator", "supervisor"]
+
+export type AgentBackend = "pi" | "openai" | "hermes"
+export const DEFAULT_AGENT_BACKEND: AgentBackend = "pi"
+export const AGENT_BACKENDS: readonly AgentBackend[] = ["pi", "openai", "hermes"]
+
+export function resolveVoiceMode(value: unknown): VoiceMode {
+  if (value === "operator" || value === "supervisor" || value === "direct") {
+    return value
+  }
+  return DEFAULT_VOICE_MODE
+}
+
+export function resolveAgentBackend(value: unknown): AgentBackend {
+  if (value === "pi" || value === "openai" || value === "hermes") {
+    return value
+  }
+  return DEFAULT_AGENT_BACKEND
 }
 
 export interface AudioAppendEvent {

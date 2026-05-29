@@ -41,6 +41,10 @@ export interface RealtimeConfig {
   instructionsOverride?: string
   conversationHistory?: { role: 'user' | 'assistant', text: string, timestamp?: number, relativeMs?: number }[]
   tracingEnabled?: boolean
+  // Realtime model strategy. See relay-server/src/types.ts.
+  voiceMode?: 'direct' | 'operator' | 'supervisor'
+  // Which host-side agent backend powers Operator / future Supervisor.
+  agentBackend?: 'pi' | 'openai' | 'hermes'
 }
 
 export interface AdapterErrorPayload {
@@ -328,6 +332,8 @@ export function useRealtime(callbacks: RealtimeCallbacks): RealtimeControls {
             deviceContext: config.deviceContext,
             instructionsOverride: config.instructionsOverride,
             conversationHistory: config.conversationHistory,
+            voiceMode: config.voiceMode,
+            agentBackend: config.agentBackend,
           }),
         )
 

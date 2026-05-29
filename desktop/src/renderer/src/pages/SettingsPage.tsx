@@ -67,6 +67,27 @@ type RealtimeModel =
   | 'gpt-realtime-mini'
 const DEFAULT_REALTIME_MODEL: RealtimeModel = 'gemini-3.1-flash-live-preview'
 
+// Mirror of the relay-server VoiceMode / AgentBackend enums. Persisted in
+// the desktop settings KV; the literal strings cross the wire as
+// session.config.voiceMode / session.config.agentBackend.
+type VoiceMode = 'direct' | 'operator' | 'supervisor'
+const VOICE_MODES: readonly VoiceMode[] = ['direct', 'operator', 'supervisor']
+const DEFAULT_VOICE_MODE: VoiceMode = 'direct'
+
+type AgentBackend = 'pi' | 'openai' | 'hermes'
+const AGENT_BACKENDS: readonly AgentBackend[] = ['pi', 'openai', 'hermes']
+const DEFAULT_AGENT_BACKEND: AgentBackend = 'pi'
+
+function normalizeVoiceMode(value: string | null): VoiceMode {
+  return VOICE_MODES.includes(value as VoiceMode) ? (value as VoiceMode) : DEFAULT_VOICE_MODE
+}
+
+function normalizeAgentBackend(value: string | null): AgentBackend {
+  return AGENT_BACKENDS.includes(value as AgentBackend)
+    ? (value as AgentBackend)
+    : DEFAULT_AGENT_BACKEND
+}
+
 const REALTIME_MODEL_LABELS: Record<RealtimeModel, string> = {
   'gemini-3.1-flash-live-preview': 'Gemini 3.1 Flash Live',
   'grok-voice-think-fast-1.0': 'Grok Voice Think Fast 1.0',
@@ -128,6 +149,12 @@ export function SettingsPage() {
   // Model + Voice
   const [model, setModel] = useState<RealtimeModel>('gemini-3.1-flash-live-preview')
   const [voice, setVoice] = useState<string>('Zephyr')
+
+  // Voice Mode + Agent backend. See VoiceMode / AgentBackend above for the
+  // wire contract. Both are persisted to SQLite settings and forwarded to
+  // the relay in every session.config.
+  const [voiceMode, setVoiceMode] = useState<VoiceMode>(DEFAULT_VOICE_MODE)
+  const [agentBackend, setAgentBackend] = useState<AgentBackend>(DEFAULT_AGENT_BACKEND)
 
   // Per-provider realtime API keys (Keychain-backed via main process).
   // We never read the secret back into the UI — only the list of which
@@ -193,6 +220,10 @@ export function SettingsPage() {
       if (m && m !== loadedModel) setSetting('realtime_model', loadedModel)
       const loadedVoice = await getVoiceForProvider(providerForModel(loadedModel))
       setVoice(loadedVoice)
+      const vm = await getSetting('voice_mode')
+      setVoiceMode(normalizeVoiceMode(vm))
+      const ab = await getSetting('agent_backend')
+      setAgentBackend(normalizeAgentBackend(ab))
       const vol = await getSetting('realtime_volume')
       if (vol) setVolume(parseFloat(vol))
       const inDev = await getSetting('input_device_id')
@@ -291,6 +322,16 @@ export function SettingsPage() {
       void setVoiceForProvider(providerForModel(model), v)
     }
   }, [model])
+
+  const updateVoiceMode = useCallback((v: VoiceMode) => {
+    setVoiceMode(v)
+    if (loadedRef.current) save('voice_mode', v)
+  }, [save])
+
+  const updateAgentBackend = useCallback((v: AgentBackend) => {
+    setAgentBackend(v)
+    if (loadedRef.current) save('agent_backend', v)
+  }, [save])
 
   // Stop + release any in-flight preview clip on unmount.
   useEffect(() => {
@@ -579,6 +620,12 @@ export function SettingsPage() {
           onSelectModel={updateModel}
           onSaved={refreshConfiguredProviders}
         />
+
+        {/* Voice Mode */}
+        <VoiceModeCard mode={voiceMode} onSelect={updateVoiceMode} />
+
+        {/* Agent */}
+        <AgentBackendCard backend={agentBackend} onSelect={updateAgentBackend} />
 
         {/* Voice */}
         <Card className="p-4 space-y-4">
@@ -1277,6 +1324,162 @@ function ModelRow({
           </button>
         </div>
       )}
+    </div>
+  )
+}
+
+const VOICE_MODE_META: Record<
+  VoiceMode,
+  { label: string; helper: string; comingSoon?: boolean }
+> = {
+  direct: {
+    label: 'Direct',
+    helper: 'The assistant uses tools directly — read, write, edit, bash, web search. Lowest latency.',
+  },
+  operator: {
+    label: 'Operator',
+    helper: 'Delegates to your agent (the classic ask_brain flow). Best for multi-step tasks and personal memory.',
+  },
+  supervisor: {
+    label: 'Supervisor',
+    helper: 'A supervisor agent keeps the conversation on track — coming soon. Behaves like Direct today.',
+    comingSoon: true,
+  },
+}
+
+function VoiceModeCard({
+  mode,
+  onSelect,
+}: {
+  mode: VoiceMode
+  onSelect: (m: VoiceMode) => void
+}) {
+  return (
+    <Card className="p-4 space-y-4">
+      <div>
+        <h3 className="text-sm font-semibold text-foreground">Voice Mode</h3>
+        <p className="text-xs text-muted-foreground mt-1">
+          How the realtime model gets its capabilities.
+        </p>
+      </div>
+
+      <div className="space-y-1.5" role="radiogroup" aria-label="Voice mode">
+        {VOICE_MODES.map((m) => (
+          <RadioOptionRow
+            key={m}
+            selected={mode === m}
+            label={VOICE_MODE_META[m].label}
+            helper={VOICE_MODE_META[m].helper}
+            badge={VOICE_MODE_META[m].comingSoon ? 'coming soon' : null}
+            onSelect={() => onSelect(m)}
+          />
+        ))}
+      </div>
+    </Card>
+  )
+}
+
+const AGENT_BACKEND_META: Record<
+  AgentBackend,
+  { label: string; helper: string }
+> = {
+  pi: {
+    label: 'PI',
+    helper: 'Pi Mono harness running locally. Default. Requires the pi CLI on PATH.',
+  },
+  openai: {
+    label: 'OpenAI',
+    helper: 'OpenAI Codex CLI. Requires the codex CLI on PATH.',
+  },
+  hermes: {
+    label: 'Hermes',
+    helper: 'Hermes agent. Requires the hermes CLI on PATH.',
+  },
+}
+
+function AgentBackendCard({
+  backend,
+  onSelect,
+}: {
+  backend: AgentBackend
+  onSelect: (b: AgentBackend) => void
+}) {
+  return (
+    <Card className="p-4 space-y-4">
+      <div>
+        <h3 className="text-sm font-semibold text-foreground">Agent</h3>
+        <p className="text-xs text-muted-foreground mt-1">
+          Which agent runs your tasks. Must be installed on this machine.
+        </p>
+      </div>
+
+      <div className="space-y-1.5" role="radiogroup" aria-label="Agent backend">
+        {AGENT_BACKENDS.map((b) => (
+          <RadioOptionRow
+            key={b}
+            selected={backend === b}
+            label={AGENT_BACKEND_META[b].label}
+            helper={AGENT_BACKEND_META[b].helper}
+            onSelect={() => onSelect(b)}
+          />
+        ))}
+      </div>
+    </Card>
+  )
+}
+
+function RadioOptionRow({
+  selected,
+  label,
+  helper,
+  badge,
+  onSelect,
+}: {
+  selected: boolean
+  label: string
+  helper: string
+  badge?: string | null
+  onSelect: () => void
+}) {
+  const handleKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault()
+      onSelect()
+    }
+  }
+  return (
+    <div
+      onClick={onSelect}
+      onKeyDown={handleKeyDown}
+      role="radio"
+      aria-checked={selected}
+      tabIndex={0}
+      className={`w-full flex items-start gap-3 rounded-md border px-3 py-2 transition-colors cursor-pointer
+        ${selected ? 'border-primary bg-accent' : 'border-input'}
+        hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50
+      `}
+    >
+      <div
+        className={`mt-1 h-3.5 w-3.5 rounded-full border-2 flex items-center justify-center shrink-0
+          ${selected ? 'border-primary' : 'border-muted-foreground'}
+        `}
+      >
+        {selected && <div className="h-1.5 w-1.5 rounded-full bg-primary" />}
+      </div>
+
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-2">
+          <span className={`text-sm ${selected ? 'font-medium text-foreground' : 'text-foreground'}`}>
+            {label}
+          </span>
+          {badge && (
+            <span className="text-[10px] uppercase tracking-wider rounded bg-muted px-1.5 py-0.5 text-muted-foreground">
+              {badge}
+            </span>
+          )}
+        </div>
+        <p className="text-[11px] text-muted-foreground mt-0.5">{helper}</p>
+      </div>
     </div>
   )
 }

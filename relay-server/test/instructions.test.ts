@@ -42,13 +42,29 @@ describe("buildInstructions", () => {
     await rm(tmpRoot, { recursive: true, force: true })
   })
 
-  it("includes the direct-tools preamble unconditionally", () => {
+  it("includes the direct-tools preamble in direct mode (default)", () => {
     const instructions = buildInstructions(makeConfig())
     expect(instructions).toMatch(/Your direct tools/)
     expect(instructions).toMatch(/read.*to inspect files/i)
     expect(instructions).toMatch(/write.*and.*edit/i)
     expect(instructions).toMatch(/bash/)
     expect(instructions).toMatch(/web_search/)
+    expect(instructions).not.toMatch(/Your brain agent/)
+  })
+
+  it("swaps to the brain agent preamble in operator mode", () => {
+    const instructions = buildInstructions(makeConfig({ voiceMode: "operator" }))
+    expect(instructions).toMatch(/Your brain agent/)
+    expect(instructions).toMatch(/ask_brain/)
+    expect(instructions).toMatch(/How ask_brain returns/)
+    expect(instructions).toMatch(/Memory/)
+    expect(instructions).not.toMatch(/Your direct tools/)
+  })
+
+  it("supervisor mode (SCAFFOLD) falls back to the direct preamble", () => {
+    const instructions = buildInstructions(makeConfig({ voiceMode: "supervisor" }))
+    expect(instructions).toMatch(/Your direct tools/)
+    expect(instructions).not.toMatch(/Your brain agent/)
   })
 
   it("loads the agent name from IDENTITY.md into the identity block", async () => {
