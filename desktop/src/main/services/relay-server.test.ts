@@ -6,7 +6,10 @@ const tokenRef = { value: null as string | null }
 const providerKeysRef = { fn: (_p: 'gemini' | 'openai' | 'xai') => null as string | null }
 const bundledRelayKeyRef = { value: null as string | null }
 const tavilyKeyRef = { value: null as string | null }
-const allocatedPortsRef = { openclawGateway: undefined as number | undefined }
+const allocatedPortsRef: {
+  openclawGateway: number | undefined
+  relay: number | undefined
+} = { openclawGateway: undefined, relay: undefined }
 const bundledNodeRef = { value: null as string | null }
 let originalResourcesPath: string | undefined
 
@@ -334,6 +337,81 @@ describe('resolveRelaySpawn', () => {
 
     const { resolveRelaySpawn } = await import('./relay-server')
     expect(resolveRelaySpawn()).toBeNull()
+  })
+})
+
+describe('getTailnetUrl', () => {
+  beforeEach(() => {
+    allocatedPortsRef.openclawGateway = undefined
+    allocatedPortsRef.relay = undefined
+  })
+
+  afterEach(() => {
+    vi.resetModules()
+  })
+
+  it('prefers the Tailscale CGNAT address over the LAN IP', async () => {
+    allocatedPortsRef.relay = 8080
+    const { getTailnetUrl } = await import('./relay-server')
+    const url = getTailnetUrl(() => ({
+      en0: [
+        { family: 'IPv4', address: '192.168.1.42', internal: false } as never,
+      ],
+      tailscale0: [
+        { family: 'IPv4', address: '100.115.7.9', internal: false } as never,
+      ],
+    }))
+    expect(url).toBe('ws://100.115.7.9:8080/ws')
+  })
+
+  it('falls back to the first non-internal LAN IPv4 when no tailnet address is present', async () => {
+    allocatedPortsRef.relay = 8080
+    const { getTailnetUrl } = await import('./relay-server')
+    const url = getTailnetUrl(() => ({
+      lo0: [{ family: 'IPv4', address: '127.0.0.1', internal: true } as never],
+      en0: [{ family: 'IPv4', address: '192.168.1.42', internal: false } as never],
+    }))
+    expect(url).toBe('ws://192.168.1.42:8080/ws')
+  })
+
+  it('uses the allocated relay port when one is recorded', async () => {
+    allocatedPortsRef.relay = 53122
+    const { getTailnetUrl } = await import('./relay-server')
+    const url = getTailnetUrl(() => ({
+      en0: [{ family: 'IPv4', address: '100.64.0.5', internal: false } as never],
+    }))
+    expect(url).toBe('ws://100.64.0.5:53122/ws')
+  })
+
+  it('falls back to port 8080 when nothing has been allocated yet', async () => {
+    allocatedPortsRef.relay = undefined
+    const { getTailnetUrl } = await import('./relay-server')
+    const url = getTailnetUrl(() => ({
+      en0: [{ family: 'IPv4', address: '100.64.0.5', internal: false } as never],
+    }))
+    expect(url).toBe('ws://100.64.0.5:8080/ws')
+  })
+
+  it('rejects 100.x addresses outside the CGNAT 100.64/10 block', async () => {
+    allocatedPortsRef.relay = 8080
+    const { getTailnetUrl } = await import('./relay-server')
+    // 100.128.x.x is public IP space, not CGNAT — must NOT be picked as a tailnet host.
+    const url = getTailnetUrl(() => ({
+      eth0: [
+        { family: 'IPv4', address: '100.128.5.5', internal: false } as never,
+        { family: 'IPv4', address: '192.168.50.50', internal: false } as never,
+      ],
+    }))
+    expect(url).toBe('ws://100.128.5.5:8080/ws') // first non-internal wins as LAN fallback
+  })
+
+  it('returns null when no non-internal IPv4 is available', async () => {
+    allocatedPortsRef.relay = 8080
+    const { getTailnetUrl } = await import('./relay-server')
+    const url = getTailnetUrl(() => ({
+      lo0: [{ family: 'IPv4', address: '127.0.0.1', internal: true } as never],
+    }))
+    expect(url).toBeNull()
   })
 })
 

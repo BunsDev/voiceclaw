@@ -1,6 +1,7 @@
 import { app } from 'electron'
 import { existsSync } from 'fs'
 import { request as httpRequest } from 'node:http'
+import { networkInterfaces } from 'node:os'
 import { join } from 'path'
 import { allocatePort, getAllocatedPorts, markAllocatedPort } from '../ports'
 import { getBundledRelayApiKey, getTavilyApiKey } from '../onboarding'
@@ -135,6 +136,50 @@ export function buildRelayEnv(): NodeJS.ProcessEnv {
     if (!env.VOICECLAW_DEVICE_TOKEN_CHECK_NONCE) env.VOICECLAW_DEVICE_TOKEN_CHECK_NONCE = bridge.nonce
   }
   return env
+}
+
+// Build the ws:// URL a paired mobile device should connect to. The relay
+// binds 0.0.0.0 (see RELAY_BIND_HOST above), but the QR payload needs a
+// concrete host the phone can reach. We prefer the Tailscale CGNAT
+// address (100.64.0.0/10) because the household pairing model assumes
+// both ends are on the tailnet — that's the only IP guaranteed to be
+// stable across cafes / hotel Wi-Fi. Fall back to the first non-internal
+// IPv4 (LAN) so dev-mode pairing still works without Tailscale running.
+// Returns `null` only when neither path turns up a usable host (e.g.
+// fully offline laptop with no interfaces up).
+export function getTailnetUrl(
+  interfacesFn: () => ReturnType<typeof networkInterfaces> = networkInterfaces,
+): string | null {
+  const port = getAllocatedPorts().relay ?? PREFERRED_RELAY_PORT
+  const host = pickPairingHost(interfacesFn())
+  if (!host) return null
+  return `ws://${host}:${port}/ws`
+}
+
+function pickPairingHost(
+  ifaces: ReturnType<typeof networkInterfaces>,
+): string | null {
+  let lanFallback: string | null = null
+  for (const name of Object.keys(ifaces)) {
+    const list = ifaces[name]
+    if (!list) continue
+    for (const entry of list) {
+      if (entry.family !== 'IPv4' || entry.internal) continue
+      if (isTailnetAddress(entry.address)) return entry.address
+      if (!lanFallback) lanFallback = entry.address
+    }
+  }
+  return lanFallback
+}
+
+function isTailnetAddress(address: string): boolean {
+  // CGNAT block 100.64.0.0/10 — Tailscale picks from this range.
+  const parts = address.split('.')
+  if (parts.length !== 4) return false
+  const first = Number(parts[0])
+  const second = Number(parts[1])
+  if (first !== 100) return false
+  return second >= 64 && second <= 127
 }
 
 // ---------------------------------------------------------------------------

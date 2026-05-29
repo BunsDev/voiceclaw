@@ -1,15 +1,14 @@
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import type { UpdateState } from '../lib/db'
-import { Wifi, WifiOff, Eye, EyeOff, Play } from 'lucide-react'
+import { Eye, EyeOff, Play } from 'lucide-react'
 import { Button } from '../components/ui/Button'
 import { Card } from '../components/ui/Card'
 import { Input } from '../components/ui/Input'
 import { Select } from '../components/ui/Select'
 import { Toggle } from '../components/ui/Toggle'
+import { DevicesCard } from '../components/DevicesCard'
 import { ShortcutsCard } from '../components/ShortcutsCard'
 import { identityApi, onboarding, providerApi, type ProviderId } from '../lib/onboarding-api'
-
-const EXPERIMENTAL_DIRECT_TOOLS = true
 import { decodeVoicePreviewAudio } from '../lib/voice-preview'
 import { useTheme, type Theme } from '../lib/use-theme'
 import { enumerateAudioDevices, type AudioDevice } from '../lib/audio-engine'
@@ -118,16 +117,6 @@ const PROVIDER_KEY_META: Record<
 export function SettingsPage() {
   const { theme, setTheme } = useTheme()
 
-  // Connection
-  const [serverUrl, setServerUrl] = useState('')
-  const [serverUrlPlaceholder, setServerUrlPlaceholder] = useState('ws://localhost:8080/ws')
-  const [apiKey, setApiKey] = useState('')
-  const [apiKeyPlaceholder, setApiKeyPlaceholder] = useState('Enter your API key')
-  const [showApiKey, setShowApiKey] = useState(false)
-  const [testStatus, setTestStatus] = useState<'idle' | 'testing' | 'ok' | 'error'>('idle')
-  const [testError, setTestError] = useState('')
-  const [resetting, setResetting] = useState(false)
-
   // Web Search (Tavily) — when enabled AND a key is set, the realtime model
   // gets a fast web_search tool alongside ask_brain. Stored as plain settings
   // KV like the relay api key. The enabled flag is independent of the key so
@@ -192,22 +181,6 @@ export function SettingsPage() {
   // Load all settings on mount
   useEffect(() => {
     ;(async () => {
-      const url = await getSetting('realtime_server_url')
-      if (url) setServerUrl(url)
-      try {
-        const ports = await window.electronAPI?.app?.getServicePorts?.()
-        const port = ports?.relay
-        if (typeof port === 'number' && port > 0) {
-          setServerUrlPlaceholder(`ws://127.0.0.1:${port}/ws`)
-        }
-      } catch {
-        // Keep the static fallback placeholder.
-      }
-      const key = await getSetting('realtime_api_key')
-      if (key) {
-        setApiKey(key)
-        setApiKeyPlaceholder(maskKey(key))
-      }
       const tk = await getSetting('tavily_api_key')
       if (tk) setTavilyKey(tk)
       // Default to enabled. Only treat the explicit string 'false' as off so
@@ -284,24 +257,6 @@ export function SettingsPage() {
   const save = useCallback((key: string, value: string) => {
     setSetting(key, value)
   }, [])
-
-  const updateServerUrl = useCallback((v: string) => {
-    setServerUrl(v)
-    if (loadedRef.current) save('realtime_server_url', v)
-  }, [save])
-
-  const updateApiKey = useCallback((v: string) => {
-    setApiKey(v)
-    if (loadedRef.current) {
-      save('realtime_api_key', v)
-      // Fire only when the user transitions from blank → set, so we
-      // don't spam an event on every keystroke. Provider name only —
-      // the key itself is never included.
-      if (v && !apiKey) {
-        captureRenderer('provider_key_saved', { provider: 'realtime', model })
-      }
-    }
-  }, [save, apiKey, model])
 
   const updateTavilyKey = useCallback((v: string) => {
     setTavilyKey(v)
@@ -535,55 +490,6 @@ export function SettingsPage() {
     }
   }, [doctorResult])
 
-  const resetBundled = useCallback(async () => {
-    setResetting(true)
-    try {
-      const result = await window.electronAPI?.app?.resetBundledDefaults?.()
-      if (result?.ok) {
-        setApiKey(result.relayApiKey)
-        setApiKeyPlaceholder(maskKey(result.relayApiKey))
-        setSetting('realtime_api_key', result.relayApiKey)
-        setServerUrl('')
-        setSetting('realtime_server_url', '')
-        setTestStatus('idle')
-        setTestError('')
-      }
-    } catch (err) {
-      console.warn('[SettingsPage] resetBundled failed', err)
-    } finally {
-      setResetting(false)
-    }
-  }, [])
-
-  const testConnection = useCallback(async () => {
-    setTestStatus('testing')
-    setTestError('')
-    try {
-      // Pass ws URL directly — main process converts to http and appends /health
-      const result = await window.electronAPI.net.healthCheck(serverUrl)
-      if (result.ok) {
-        setTestStatus('ok')
-        captureRenderer('test_call_completed', { success: true, surface: 'settings' })
-      } else {
-        setTestStatus('error')
-        setTestError(result.error || 'Connection failed')
-        captureRenderer('test_call_completed', {
-          success: false,
-          surface: 'settings',
-          reason: result.error ?? 'unknown',
-        })
-      }
-    } catch (err) {
-      setTestStatus('error')
-      setTestError(err instanceof Error ? err.message : 'Connection failed')
-      captureRenderer('test_call_completed', {
-        success: false,
-        surface: 'settings',
-        reason: err instanceof Error ? err.message : 'unknown',
-      })
-    }
-  }, [serverUrl])
-
   const inputDevices = audioDevices.filter((d) => d.kind === 'audioinput')
   const outputDevices = audioDevices.filter((d) => d.kind === 'audiooutput')
 
@@ -591,57 +497,8 @@ export function SettingsPage() {
     <div className="flex-1 flex flex-col overflow-hidden">
       <div className="flex-1 overflow-y-auto px-4 py-4 space-y-4">
 
-        {/* Connection — hidden when direct-tools experiment is active */}
-        {!EXPERIMENTAL_DIRECT_TOOLS && (
-        <Card className="p-4 space-y-4">
-          <h3 className="text-sm font-semibold text-foreground">Connection</h3>
-
-          <div className="space-y-1.5">
-            <label className="text-xs text-muted-foreground">Relay Server URL</label>
-            <Input
-              value={serverUrl}
-              onChange={(e) => updateServerUrl(e.target.value)}
-              placeholder={serverUrlPlaceholder}
-            />
-          </div>
-
-          <div className="space-y-1.5">
-            <label className="text-xs text-muted-foreground">API Key</label>
-            <div className="flex gap-2">
-              <div className="flex-1 relative">
-                <Input
-                  type={showApiKey ? 'text' : 'password'}
-                  value={apiKey}
-                  onChange={(e) => updateApiKey(e.target.value)}
-                  placeholder={apiKeyPlaceholder}
-                  className="pr-10"
-                />
-                <button
-                  onClick={() => setShowApiKey(!showApiKey)}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-                >
-                  {showApiKey ? <EyeOff size={16} /> : <Eye size={16} />}
-                </button>
-              </div>
-            </div>
-          </div>
-
-          <ConnectionStatus
-            status={testStatus}
-            error={testError}
-            onTest={testConnection}
-          />
-
-          <div className="flex items-center justify-between text-xs">
-            <span className="text-muted-foreground">
-              Bundled relay running at <code className="rounded bg-muted px-1 py-0.5">{serverUrlPlaceholder}</code>
-            </span>
-            <Button variant="ghost" size="sm" onClick={resetBundled} disabled={resetting}>
-              {resetting ? 'Resetting…' : 'Reset to bundled defaults'}
-            </Button>
-          </div>
-        </Card>
-        )}
+        {/* Devices */}
+        <DevicesCard />
 
         {/* Identity */}
         <Card className="p-4 space-y-4">
@@ -1167,11 +1024,6 @@ function relativeTime(ts: number): string {
   return `${Math.floor(diff / 86400)} days ago`
 }
 
-function maskKey(key: string): string {
-  if (key.length <= 8) return '••••••••'
-  return `${key.slice(0, 4)}…${key.slice(-4)}`
-}
-
 function isRealtimeModel(model: string | null): model is RealtimeModel {
   return REALTIME_MODELS.includes(model as RealtimeModel)
 }
@@ -1548,48 +1400,3 @@ function InlineKeyEditor({
   )
 }
 
-function ConnectionStatus({
-  status,
-  error,
-  onTest,
-}: {
-  status: 'idle' | 'testing' | 'ok' | 'error'
-  error: string
-  onTest: () => void
-}) {
-  return (
-    <div className={`flex items-center justify-between rounded-md border px-3 py-2
-      ${status === 'ok' ? 'border-[var(--brand-sage)] bg-[var(--brand-sage-wash)]'
-        : status === 'error' ? 'border-destructive/50 bg-destructive/5'
-        : 'border-input'}
-    `}>
-      <div className="flex items-center gap-2">
-        {status === 'testing' ? (
-          <div className="h-4 w-4 border-2 border-muted-foreground border-t-transparent rounded-full animate-spin" />
-        ) : status === 'ok' ? (
-          <Wifi size={16} className="text-[var(--brand-sage)]" />
-        ) : (
-          <WifiOff size={16} className={status === 'error' ? 'text-destructive' : 'text-muted-foreground'} />
-        )}
-        <span className={`text-sm ${
-          status === 'ok' ? 'text-[var(--brand-sage)]'
-          : status === 'error' ? 'text-destructive'
-          : 'text-muted-foreground'
-        }`}>
-          {status === 'ok' ? 'Connected'
-          : status === 'testing' ? 'Testing...'
-          : status === 'error' ? error
-          : 'Not tested'}
-        </span>
-      </div>
-      <Button
-        variant="ghost"
-        size="sm"
-        onClick={onTest}
-        disabled={status === 'testing'}
-      >
-        Test
-      </Button>
-    </div>
-  )
-}

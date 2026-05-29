@@ -138,8 +138,44 @@ declare global {
         onStateChanged: (handler: (state: UpdateState) => void) => () => void
         onStaged: (handler: (payload: { version: string; releaseNotes: string | null }) => void) => () => void
       }
+      devices?: {
+        create: (label: string) => Promise<DeviceCreateResult>
+        list: () => Promise<DeviceListRow[]>
+        revoke: (id: string) => Promise<{ ok: true } | { ok: false; error: string }>
+        rename: (
+          id: string,
+          label: string,
+        ) => Promise<{ ok: true } | { ok: false; error: string }>
+        remove: (id: string) => Promise<{ ok: true } | { ok: false; error: string }>
+      }
     }
   }
+}
+
+export type DevicePairPayload = {
+  v: 1
+  url: string
+  token: string
+  label: string
+}
+
+export type DeviceCreateResult =
+  | {
+      ok: true
+      id: string
+      label: string
+      payload: DevicePairPayload
+      plaintext: string
+      hasNetwork: boolean
+    }
+  | { ok: false; error: string }
+
+export type DeviceListRow = {
+  id: string
+  label: string
+  createdAt: number
+  lastUsedAt: number | null
+  revoked: boolean
 }
 
 const api = () => window.electronAPI.db
