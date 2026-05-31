@@ -5,13 +5,13 @@ import { initLangfuse, shutdownLangfuse } from "./tracing/langfuse.js"
 initLangfuse()
 
 import express from "express"
-import { createServer } from "node:http"
 import { networkInterfaces } from "node:os"
 import { WebSocketServer } from "ws"
 import { RelaySession } from "./session.js"
 import { getTestPageHTML } from "./test-page.js"
 import { log, warn, error as logError } from "./log.js"
 import { gracefulShutdown } from "./shutdown.js"
+import { createRelayServer } from "./server-factory.js"
 
 const SHUTDOWN_TIMEOUT_MS = 10_000
 
@@ -37,7 +37,7 @@ app.get("/test", (req, res) => {
   res.type("html").send(getTestPageHTML(host))
 })
 
-const server = createServer(app)
+const { server, tls: tlsActive } = createRelayServer(app)
 
 // 4 MB headroom for screen-share frames — composite + original + strokes-png in
 // a single frame.append message can comfortably exceed the previous 1 MB cap.
@@ -97,17 +97,19 @@ if (!process.env.RELAY_API_KEY) {
   warn("⚠️  RELAY_API_KEY is not set — WebSocket connections will not require authentication (dev only)")
 }
 
+const httpScheme = tlsActive ? "https" : "http"
+const wsScheme = tlsActive ? "wss" : "ws"
 server.listen(PORT, HOST, () => {
   const lanIP = getLanIP()
-  log(`Relay server listening on http://${HOST}:${PORT}`)
+  log(`Relay server listening on ${httpScheme}://${HOST}:${PORT}`)
   if (isTestPageEnabled()) {
-    log(`Test page: http://localhost:${PORT}/test`)
+    log(`Test page: ${httpScheme}://localhost:${PORT}/test`)
   }
   if (HOST === "0.0.0.0" && lanIP) {
     log(`Connect from your phone:`)
-    log(`  ws://${lanIP}:${PORT}/ws`)
+    log(`  ${wsScheme}://${lanIP}:${PORT}/ws`)
     if (isTestPageEnabled()) {
-      log(`  Test page: http://${lanIP}:${PORT}/test`)
+      log(`  Test page: ${httpScheme}://${lanIP}:${PORT}/test`)
     }
   }
 })

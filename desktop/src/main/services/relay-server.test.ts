@@ -346,6 +346,34 @@ describe('getTailnetUrl', () => {
     allocatedPortsRef.relay = undefined
   })
 
+  it('returns wss://<hostname>:<port>/ws when a TLS handle is active', async () => {
+    allocatedPortsRef.relay = 8080
+    const { getTailnetUrl } = await import('./relay-server')
+    const url = getTailnetUrl(
+      () => ({
+        en0: [{ family: 'IPv4', address: '192.168.1.42', internal: false } as never],
+      }),
+      () => ({
+        hostname: 'macbook.tail0abcd.ts.net',
+        certPath: '/tmp/cert.pem',
+        keyPath: '/tmp/key.pem',
+      }),
+    )
+    expect(url).toBe('wss://macbook.tail0abcd.ts.net:8080/ws')
+  })
+
+  it('falls back to ws://<ip>:<port>/ws when no TLS handle is set', async () => {
+    allocatedPortsRef.relay = 8080
+    const { getTailnetUrl } = await import('./relay-server')
+    const url = getTailnetUrl(
+      () => ({
+        en0: [{ family: 'IPv4', address: '100.64.0.5', internal: false } as never],
+      }),
+      () => null,
+    )
+    expect(url).toBe('ws://100.64.0.5:8080/ws')
+  })
+
   afterEach(() => {
     vi.resetModules()
   })

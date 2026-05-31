@@ -1,5 +1,6 @@
 import { app } from 'electron'
 import { existsSync } from 'fs'
+import { spawnSync } from 'node:child_process'
 import { request as httpRequest } from 'node:http'
 import { networkInterfaces } from 'node:os'
 import { join } from 'path'
@@ -13,7 +14,111 @@ import { serviceManager } from './service-manager'
 
 const PREFERRED_RELAY_PORT = 8080
 
+const TAILSCALE_BIN_CANDIDATES = [
+  '/Applications/Tailscale.app/Contents/MacOS/Tailscale',
+  'tailscale',
+]
+
 export type RelaySpawnSpec = { command: string; args: string[] }
+
+export type TailscaleTlsHandle = {
+  hostname: string
+  certPath: string
+  keyPath: string
+}
+
+// Single per-launch handle. Populated once on first attempt; failures
+// cache as `null` so we don't shell out repeatedly mid-session.
+let tlsHandle: TailscaleTlsHandle | null | undefined = undefined
+
+export function getRelayTlsHandle(): TailscaleTlsHandle | null {
+  return tlsHandle ?? null
+}
+
+// Visible for tests — lets the suite reset module-level state between runs.
+export function __resetRelayTlsHandleForTests(): void {
+  tlsHandle = undefined
+}
+
+function runTailscale(args: string[], timeoutMs: number): { ok: boolean; stdout: string; stderr: string } {
+  for (const bin of TAILSCALE_BIN_CANDIDATES) {
+    try {
+      const r = spawnSync(bin, args, { encoding: 'utf-8', timeout: timeoutMs })
+      if (r.error) continue
+      return {
+        ok: r.status === 0,
+        stdout: r.stdout ?? '',
+        stderr: r.stderr ?? '',
+      }
+    } catch {
+      // try next candidate
+    }
+  }
+  return { ok: false, stdout: '', stderr: 'tailscale binary not found' }
+}
+
+// Best-effort Tailscale Let's Encrypt cert acquisition for the local
+// tailnet hostname. Returns a handle on success, or null if Tailscale
+// isn't installed/up. NEVER throws — startup must not block on this.
+//
+// Manual fallback if this fails: run
+//   tailscale cert --cert-file <userData>/relay-cert.pem \
+//                  --key-file  <userData>/relay-key.pem <host>.<tailnet>.ts.net
+// and restart the app; the resulting files at the userData paths below
+// will be picked up automatically on next boot.
+export function ensureTailscaleTlsHandle(
+  userDataDir: string,
+  options: { runner?: typeof runTailscale } = {},
+): TailscaleTlsHandle | null {
+  if (tlsHandle !== undefined) return tlsHandle
+  const runner = options.runner ?? runTailscale
+  try {
+    const status = runner(['status', '--json'], 4_000)
+    if (!status.ok || !status.stdout) {
+      console.warn('[relay-tls] tailscale status failed; falling back to ws://', status.stderr.trim())
+      tlsHandle = null
+      return null
+    }
+    let parsed: { Self?: { DNSName?: string } }
+    try {
+      parsed = JSON.parse(status.stdout)
+    } catch (err) {
+      console.warn('[relay-tls] failed to parse tailscale status json', err)
+      tlsHandle = null
+      return null
+    }
+    const dnsName = parsed.Self?.DNSName?.replace(/\.$/, '') ?? ''
+    if (!dnsName) {
+      console.warn('[relay-tls] tailscale Self.DNSName missing; falling back to ws://')
+      tlsHandle = null
+      return null
+    }
+    const certPath = join(userDataDir, 'relay-cert.pem')
+    const keyPath = join(userDataDir, 'relay-key.pem')
+    // tailscale cert is idempotent — exits 0 if a valid cert already
+    // exists. The provisioning call can take up to ~30s the first time
+    // (LE issuance) so we cap generously.
+    const cert = runner(
+      ['cert', '--cert-file', certPath, '--key-file', keyPath, dnsName],
+      60_000,
+    )
+    if (!cert.ok || !existsSync(certPath) || !existsSync(keyPath)) {
+      console.warn(
+        '[relay-tls] tailscale cert failed; falling back to ws://',
+        cert.stderr.trim() || cert.stdout.trim(),
+      )
+      tlsHandle = null
+      return null
+    }
+    tlsHandle = { hostname: dnsName, certPath, keyPath }
+    console.info(`[relay-tls] wss:// enabled for ${dnsName}`)
+    return tlsHandle
+  } catch (err) {
+    console.warn('[relay-tls] unexpected error acquiring cert; falling back to ws://', err)
+    tlsHandle = null
+    return null
+  }
+}
 
 export async function startBundledRelayServer(): Promise<void> {
   const spec = resolveRelaySpawn()
@@ -31,6 +136,15 @@ export async function startBundledRelayServer(): Promise<void> {
   }
 
   const port = await allocatePort('relay')
+
+  // Best-effort: get a Tailscale-issued LE cert so the relay listens on
+  // wss:// (which iOS trusts natively). Failure leaves us on ws:// — the
+  // existing tailnet path still works, just less ideal.
+  try {
+    ensureTailscaleTlsHandle(app.getPath('userData'))
+  } catch (err) {
+    console.warn('[relay-tls] ensureTailscaleTlsHandle threw (ignored)', err)
+  }
 
   const env = buildRelayEnv()
   if (spec.command === process.execPath) {
@@ -135,6 +249,11 @@ export function buildRelayEnv(): NodeJS.ProcessEnv {
     if (!env.VOICECLAW_DEVICE_TOKEN_CHECK_URL) env.VOICECLAW_DEVICE_TOKEN_CHECK_URL = bridge.url
     if (!env.VOICECLAW_DEVICE_TOKEN_CHECK_NONCE) env.VOICECLAW_DEVICE_TOKEN_CHECK_NONCE = bridge.nonce
   }
+  const tls = getRelayTlsHandle()
+  if (tls) {
+    if (!env.RELAY_TLS_CERT) env.RELAY_TLS_CERT = tls.certPath
+    if (!env.RELAY_TLS_KEY) env.RELAY_TLS_KEY = tls.keyPath
+  }
   return env
 }
 
@@ -149,8 +268,11 @@ export function buildRelayEnv(): NodeJS.ProcessEnv {
 // fully offline laptop with no interfaces up).
 export function getTailnetUrl(
   interfacesFn: () => ReturnType<typeof networkInterfaces> = networkInterfaces,
+  tlsFn: () => TailscaleTlsHandle | null = getRelayTlsHandle,
 ): string | null {
   const port = getAllocatedPorts().relay ?? PREFERRED_RELAY_PORT
+  const tls = tlsFn()
+  if (tls) return `wss://${tls.hostname}:${port}/ws`
   const host = pickPairingHost(interfacesFn())
   if (!host) return null
   return `ws://${host}:${port}/ws`
@@ -202,6 +324,9 @@ const FORWARDED_KEYS = [
   'VOICECLAW_WORKSPACE',
   'VOICECLAW_DEVICE_TOKEN_CHECK_URL',
   'VOICECLAW_DEVICE_TOKEN_CHECK_NONCE',
+  'RELAY_TLS_CERT',
+  'RELAY_TLS_KEY',
+  'VOICECLAW_MOBILE_SCHEME',
 ] as const
 
 const PROVIDER_ENV_KEYS: Record<ProviderId, string> = {
