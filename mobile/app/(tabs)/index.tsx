@@ -77,6 +77,7 @@ export default function ChatScreen() {
   const [debugMode, setDebugMode] = useState(false)
   const [streamingRole, setStreamingRole] = useState<'user' | 'assistant'>('assistant')
   const [isUserSpeaking, setIsUserSpeaking] = useState(false)
+  const [terminalError, setTerminalError] = useState<'pair' | 'connection' | null>(null)
   const flatListRef = useRef<FlatList<DisplayItem>>(null)
   const initialLoadGraceRef = useRef(true)
   const isPinnedToBottomRef = useRef(true)
@@ -111,6 +112,7 @@ export default function ChatScreen() {
       console.log('[Realtime] Session ready:', sessionId)
       setIsCallActive(true)
       setIsConnecting(false)
+      setTerminalError(null)
       cancelReconnectRef.current?.()
       pairNeededShownRef.current = false
       connectionErrorShownRef.current = false
@@ -233,6 +235,10 @@ export default function ChatScreen() {
       if (pairNeededShownRef.current) {
         console.log('[Realtime] Disconnect after pair-needed; skipping auto-reconnect')
         setIsConnecting(false)
+        setIsCallActive(false)
+        setIsThinking(false)
+        setIsUserSpeaking(false)
+        setTerminalError('pair')
         return
       }
       console.log('[Realtime] Unexpected disconnect, triggering auto-reconnect')
@@ -241,17 +247,28 @@ export default function ChatScreen() {
     onError: (message, code) => {
       console.error(`[Realtime] Error (${code}): ${message}`)
       const convId = conversationIdRef.current
-      if (!convId) return
       if (code === 401) {
         cancelReconnectRef.current?.()
-        if (pairNeededShownRef.current) return
-        pairNeededShownRef.current = true
-        addMessage(convId, 'assistant', PAIR_NEEDED_MESSAGE).then(() => loadMessagesRef.current())
+        setIsConnecting(false)
+        setIsCallActive(false)
+        setIsThinking(false)
+        setIsUserSpeaking(false)
+        setTerminalError('pair')
+        if (convId && !pairNeededShownRef.current) {
+          pairNeededShownRef.current = true
+          addMessage(convId, 'assistant', PAIR_NEEDED_MESSAGE).then(() => loadMessagesRef.current())
+        }
         return
       }
-      if (connectionErrorShownRef.current) return
-      connectionErrorShownRef.current = true
-      addMessage(convId, 'assistant', `Couldn't reach your VoiceClaw desktop. Check that it's running and on the same network, then try again.`).then(() => loadMessagesRef.current())
+      setIsConnecting(false)
+      setIsCallActive(false)
+      setIsThinking(false)
+      setIsUserSpeaking(false)
+      setTerminalError('connection')
+      if (convId && !connectionErrorShownRef.current) {
+        connectionErrorShownRef.current = true
+        addMessage(convId, 'assistant', `Couldn't reach your VoiceClaw desktop. Check that it's running and on the same network, then try again.`).then(() => loadMessagesRef.current())
+      }
     },
     onRmsMetrics: (metrics) => {
       setRmsMetrics(metrics)
@@ -304,6 +321,7 @@ export default function ChatScreen() {
     setToolCalls(new Map())
     setStreamingText(null)
     setIsThinking(false)
+    setTerminalError(null)
   }, [resetScrollAnchoring])
 
   const loadConversation = useCallback(async (id: number) => {
@@ -436,7 +454,11 @@ export default function ChatScreen() {
       stopRealtimeCall()
       return
     }
+    if (isConnecting) return
 
+    setTerminalError(null)
+    pairNeededShownRef.current = false
+    connectionErrorShownRef.current = false
     setIsConnecting(true)
     let callStarted = false
 
@@ -459,7 +481,7 @@ export default function ChatScreen() {
         setIsConnecting(false)
       }
     }
-  }, [isCallActive, conversationId, loadMessages])
+  }, [isCallActive, isConnecting, conversationId, loadMessages])
 
   const startRealtimeCall = useCallback(async (): Promise<boolean> => {
     if (!conversationId) return false
@@ -692,6 +714,18 @@ export default function ChatScreen() {
         </View>
       )}
 
+      {terminalError && !isCallActive && !isConnecting && reconnectState.status !== 'reconnecting' && reconnectState.status !== 'failed' && (
+        <View testID="terminal-error-banner" className="items-center gap-2 border-t border-border bg-muted/50 px-4 py-3">
+          <Text className="text-center text-sm font-medium text-destructive">
+            {terminalError === 'pair' ? 'Not paired with desktop' : 'Couldn\'t reach the desktop'}
+          </Text>
+          <Button testID="try-again-button" variant="secondary" size="sm" onPress={toggleCall}>
+            <Icon as={RefreshCwIcon} size={16} className="text-foreground" />
+            <Text className="ml-1 text-sm text-foreground">Try again</Text>
+          </Button>
+        </View>
+      )}
+
       {isCallActive && (
         <View testID="call-controls" className="flex-row items-center justify-center gap-4 border-t border-border bg-muted/50 px-4 py-3">
           <Button testID="mute-button" variant={isMuted ? 'destructive' : 'secondary'} size="icon" className="rounded-full" onPress={toggleMute}>
@@ -752,8 +786,8 @@ export default function ChatScreen() {
       <View testID="input-bar" className="flex-row items-center gap-2 border-t border-border bg-card/80 px-4 py-3">
         {!isCallActive && (
           <Button
-            testID="call-button"
-            variant={isConnecting ? 'default' : 'secondary'}
+            testID={terminalError ? 'retry-call-button' : 'call-button'}
+            variant={isConnecting ? 'default' : terminalError ? 'destructive' : 'secondary'}
             size="icon"
             className="rounded-full"
             onPress={toggleCall}
@@ -761,7 +795,9 @@ export default function ChatScreen() {
           >
             {isConnecting
               ? <ActivityIndicator size="small" color={colorScheme === 'dark' ? palette.paper : '#FFFAF2'} />
-              : <Icon as={MicIcon} size={20} className="text-foreground" />}
+              : terminalError
+                ? <Icon as={RefreshCwIcon} size={20} className="text-destructive-foreground" />
+                : <Icon as={MicIcon} size={20} className="text-foreground" />}
           </Button>
         )}
         <Input

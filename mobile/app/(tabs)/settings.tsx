@@ -13,7 +13,7 @@ import { validateApiKey, type Provider, type ValidationStatus } from '@/lib/vali
 import ExpoCustomPipelineModule from '@/modules/expo-custom-pipeline/src/ExpoCustomPipelineModule'
 import { AlertCircleIcon, CheckIcon, EyeIcon, EyeOffIcon, RefreshCwIcon, WifiIcon, WifiOffIcon } from 'lucide-react-native'
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { ActivityIndicator, Animated, KeyboardAvoidingView, Platform, Pressable, ScrollView, Switch, TextInput, View } from 'react-native'
+import { ActivityIndicator, Alert, Animated, KeyboardAvoidingView, Platform, Pressable, ScrollView, Switch, TextInput, View } from 'react-native'
 import Slider from '@react-native-community/slider'
 import { useColorScheme } from 'nativewind'
 
@@ -111,6 +111,10 @@ export default function SettingsScreen() {
   const [realtimeModel, setRealtimeModel] = useState<RealtimeModel>('gemini-3.1-flash-live-preview')
   const [realtimeTestStatus, setRealtimeTestStatus] = useState<'idle' | 'testing' | 'ok' | 'error'>('idle')
   const [realtimeTestError, setRealtimeTestError] = useState('')
+
+  type PairTest = 'idle' | 'testing' | 'paired' | 'unauthorized' | 'unreachable'
+  const [pairTestStatus, setPairTestStatus] = useState<PairTest>('idle')
+  const [pairTestDetail, setPairTestDetail] = useState('')
 
   // Debug mode
   const [debugMode, setDebugMode] = useState(false)
@@ -460,6 +464,81 @@ export default function SettingsScreen() {
     setSetting('direct_provider_mode', v ? 'true' : 'false')
   }, [])
 
+  const testPairing = useCallback(async () => {
+    setPairTestStatus('testing')
+    setPairTestDetail('')
+    if (!realtimeApiKey) {
+      setPairTestStatus('unauthorized')
+      setPairTestDetail('No token stored. Pair this device from the desktop first.')
+      return
+    }
+    const url = realtimeServerUrl || DEFAULT_REALTIME_SERVER_URL
+    const result = await new Promise<PairTest>((resolve) => {
+      let settled = false
+      const done = (r: PairTest) => { if (!settled) { settled = true; try { ws.close() } catch {} resolve(r) } }
+      let ws: WebSocket
+      try {
+        ws = new WebSocket(url)
+      } catch {
+        resolve('unreachable')
+        return
+      }
+      const timer = setTimeout(() => done('unreachable'), 5000)
+      ws.onopen = () => {
+        try {
+          ws.send(JSON.stringify({ type: 'session.auth', apiKey: realtimeApiKey }))
+        } catch {
+          clearTimeout(timer)
+          done('unreachable')
+        }
+      }
+      ws.onmessage = (e) => {
+        clearTimeout(timer)
+        try {
+          const msg = JSON.parse(String(e.data))
+          if (msg?.type === 'error' && msg?.code === 401) return done('unauthorized')
+        } catch { /* ignore */ }
+        done('paired')
+      }
+      ws.onerror = () => { clearTimeout(timer); done('unreachable') }
+      ws.onclose = (e: CloseEvent) => {
+        clearTimeout(timer)
+        if (e.code === 1008 || e.code === 4401) return done('unauthorized')
+        if (!settled) done('unreachable')
+      }
+    })
+    setPairTestStatus(result)
+    if (result === 'unreachable') {
+      setPairTestDetail(`Couldn't reach ${url}. Check the desktop is running and on the same Tailscale.`)
+    } else if (result === 'unauthorized') {
+      setPairTestDetail('Server rejected the token (401). Re-pair from the desktop.')
+    } else {
+      setPairTestDetail('Connected — token accepted.')
+    }
+  }, [realtimeApiKey, realtimeServerUrl])
+
+  const forgetPairing = useCallback(() => {
+    Alert.alert(
+      'Forget pairing?',
+      'This clears the stored desktop URL and API key. You\'ll need to re-pair from the desktop QR.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Forget',
+          style: 'destructive',
+          onPress: async () => {
+            setRealtimeApiKey('')
+            setRealtimeServerUrl(DEFAULT_REALTIME_SERVER_URL)
+            await setSetting('realtime_api_key', '')
+            await setSetting('realtime_server_url', '')
+            setPairTestStatus('idle')
+            setPairTestDetail('')
+          },
+        },
+      ],
+    )
+  }, [])
+
   const toggleTelemetry = useCallback(async (v: boolean) => {
     setTelemetryEnabled(v)
     await setMobileOptedOut(!v)
@@ -601,6 +680,90 @@ export default function SettingsScreen() {
                 </Pressable>
               </View>
           </>
+        </Card>
+
+        <Card testID="pairing-card" className="gap-4 p-4">
+          <View className="gap-1">
+            <Text className="text-lg font-semibold text-foreground">Desktop pairing</Text>
+            <Text className="text-xs text-muted-foreground">
+              Check whether this device is paired with your VoiceClaw desktop and the token is still accepted.
+            </Text>
+          </View>
+
+          <View className={`flex-row items-center gap-2 rounded-lg border px-3 py-2 ${
+            pairTestStatus === 'paired'
+              ? 'border-brand-sage/30 bg-brand-sage/10'
+              : pairTestStatus === 'unauthorized' || pairTestStatus === 'unreachable'
+                ? 'border-destructive/50 bg-destructive/5'
+                : realtimeApiKey
+                  ? 'border-input'
+                  : 'border-destructive/50 bg-destructive/5'
+          }`}>
+            {pairTestStatus === 'testing' ? (
+              <ActivityIndicator size="small" color={palette.muted} />
+            ) : (
+              <Icon
+                as={pairTestStatus === 'paired' || (pairTestStatus === 'idle' && realtimeApiKey) ? WifiIcon : WifiOffIcon}
+                size={16}
+                className={
+                  pairTestStatus === 'paired'
+                    ? 'text-brand-sage'
+                    : pairTestStatus === 'unauthorized' || pairTestStatus === 'unreachable' || !realtimeApiKey
+                      ? 'text-destructive'
+                      : 'text-muted-foreground'
+                }
+              />
+            )}
+            <Text
+              testID="pairing-status-text"
+              className={`flex-1 text-sm ${
+                pairTestStatus === 'paired'
+                  ? 'text-brand-sage'
+                  : pairTestStatus === 'unauthorized' || pairTestStatus === 'unreachable' || !realtimeApiKey
+                    ? 'text-destructive'
+                    : 'text-muted-foreground'
+              }`}
+              numberOfLines={6}
+              selectable
+            >
+              {!realtimeApiKey
+                ? 'Not paired — scan the QR from your desktop.'
+                : pairTestStatus === 'testing'
+                  ? 'Testing...'
+                  : pairTestStatus === 'paired'
+                    ? 'Paired — token accepted by the desktop.'
+                    : pairTestStatus === 'unauthorized'
+                      ? 'Connection failed — try re-pairing.'
+                      : pairTestStatus === 'unreachable'
+                        ? pairTestDetail || 'Couldn\'t reach the desktop.'
+                        : 'Paired (token stored). Tap Test to verify the desktop accepts it.'}
+            </Text>
+            <Pressable
+              testID="pairing-test-button"
+              onPress={testPairing}
+              disabled={pairTestStatus === 'testing'}
+              className={`rounded-md px-3 py-1 ${pairTestStatus === 'testing' ? 'opacity-50' : ''} bg-primary/10`}
+            >
+              <Text className="text-sm font-medium text-primary">Test</Text>
+            </Pressable>
+          </View>
+
+          {realtimeApiKey ? (
+            <View className="flex-row items-center justify-between">
+              <Text className="text-xs text-muted-foreground" selectable>
+                Token: vcd_…{realtimeApiKey.slice(-8)}
+              </Text>
+              <Pressable testID="forget-pairing-button" onPress={forgetPairing} hitSlop={8}>
+                <Text className="text-xs font-medium text-destructive">Forget pairing</Text>
+              </Pressable>
+            </View>
+          ) : (
+            <View className="rounded-lg border border-input bg-background/50 p-3 dark:bg-input/20">
+              <Text className="text-xs leading-5 text-muted-foreground">
+                On your Mac: open VoiceClaw → Settings → Devices → Pair a device. Then scan the QR with the iPhone Camera.
+              </Text>
+            </View>
+          )}
         </Card>
 
         <Card testID="direct-provider-card" className="gap-2 p-4">
