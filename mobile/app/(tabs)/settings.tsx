@@ -8,12 +8,11 @@ import { BRAND } from '@/lib/brand'
 import type { BrainConnectionMode } from '@/lib/chat'
 import { DEFAULT_REALTIME_SERVER_URL } from '@/lib/relay-config'
 import { connectPlugin, disconnectPlugin, getPluginStatus, addPluginStatusListener, type PluginConnectionStatus } from '@/lib/plugin-completion'
-import { runPipelineTests, type TestResult } from '@/lib/pipeline-test-runner'
 import { isOptedOut as isMobileOptedOut, setMobileOptedOut } from '@/lib/telemetry'
 import { useAutoSave, type SaveStatus } from '@/lib/use-auto-save'
 import { validateApiKey, type Provider, type ValidationStatus } from '@/lib/validate-api-key'
 import ExpoCustomPipelineModule from '@/modules/expo-custom-pipeline/src/ExpoCustomPipelineModule'
-import { AlertCircleIcon, CheckIcon, EyeIcon, EyeOffIcon, PlayIcon, RefreshCwIcon, WifiIcon, WifiOffIcon } from 'lucide-react-native'
+import { AlertCircleIcon, CheckIcon, EyeIcon, EyeOffIcon, RefreshCwIcon, WifiIcon, WifiOffIcon } from 'lucide-react-native'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { ActivityIndicator, Animated, KeyboardAvoidingView, Platform, Pressable, ScrollView, Switch, TextInput, View } from 'react-native'
 import Slider from '@react-native-community/slider'
@@ -136,11 +135,6 @@ export default function SettingsScreen() {
 
   // Kokoro model download state
   const [kokoroStatus, setKokoroStatus] = useState<'checking' | 'ready' | 'not-downloaded' | 'downloading' | 'error' | 'unavailable'>('checking')
-
-  // Pipeline test state
-  const [testRunning, setTestRunning] = useState(false)
-  const [testProgress, setTestProgress] = useState('')
-  const [testResults, setTestResults] = useState<TestResult[]>([])
 
   // Latency stats state
   const [latencyStats, setLatencyStats] = useState<LatencyAverages | null>(null)
@@ -730,47 +724,6 @@ export default function SettingsScreen() {
               onValueChange={toggleTelemetry}
             />
           </View>
-        </Card>
-
-        <Card testID="pipeline-test-card" className="gap-4 p-4">
-          <Text className="text-lg font-semibold text-foreground">Pipeline Tests</Text>
-          <Button
-            testID="run-pipeline-tests"
-            variant="secondary"
-            disabled={testRunning}
-            onPress={async () => {
-              setTestRunning(true)
-              setTestResults([])
-              setTestProgress('Starting...')
-              try {
-                const results = await runPipelineTests((msg) => setTestProgress(msg))
-                setTestResults(results)
-                setTestProgress('')
-              } catch (e: any) {
-                setTestProgress(`Error: ${e.message}`)
-              } finally {
-                setTestRunning(false)
-              }
-            }}
-          >
-            {testRunning
-              ? <ActivityIndicator size="small" color={palette.muted} />
-              : <Icon as={PlayIcon} size={16} className="text-foreground" />}
-            <Text className="ml-2 text-foreground">{testRunning ? 'Running...' : 'Run Pipeline Tests'}</Text>
-          </Button>
-          {testProgress ? (
-            <Text className="text-sm text-muted-foreground">{testProgress}</Text>
-          ) : null}
-          {testResults.map((r, i) => (
-            <View key={i} className="flex-row items-center gap-2">
-              <Text className={r.passed ? 'text-brand-sage' : 'text-destructive'}>
-                {r.passed ? 'PASS' : 'FAIL'}
-              </Text>
-              <Text className="flex-1 text-sm text-foreground">{r.name}</Text>
-              <Text className="text-xs text-muted-foreground">{(r.durationMs / 1000).toFixed(1)}s</Text>
-              {r.error ? <Text className="text-xs text-red-400">{r.error}</Text> : null}
-            </View>
-          ))}
         </Card>
 
         <Card testID="latency-stats-card" className="gap-4 p-4">
