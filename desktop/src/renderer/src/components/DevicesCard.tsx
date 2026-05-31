@@ -1,19 +1,34 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import QRCode from 'qrcode'
 import { Card } from './ui/Card'
 import { Button } from './ui/Button'
 import { Input } from './ui/Input'
 import type { DeviceCreateResult, DeviceListRow } from '../lib/db'
+import { buildDefaultLabel, buildPairDeeplink, DEFAULT_MOBILE_SCHEME } from '../lib/pair'
 
 type PairingState =
   | { kind: 'idle' }
-  | { kind: 'naming'; label: string; submitting: boolean; error: string | null }
+  | { kind: 'minting'; label: string }
+  | { kind: 'error'; error: string }
   | {
       kind: 'paired'
       created: Extract<DeviceCreateResult, { ok: true }>
       qrDataUrl: string
+      deeplink: string
+      label: string
+      labelDirty: boolean
       copied: 'token' | 'url' | null
+      confirmed: boolean
     }
+
+// Mobile URL scheme to embed in the QR deeplink. Default targets the
+// staging TestFlight build (`voiceclaw-staging`); flip via Vite env
+// when staging is promoted to prod. Dev builds use `voiceclaw-dev`.
+function getMobileScheme(): string {
+  const fromEnv = (import.meta as { env?: Record<string, string | undefined> }).env
+    ?.VITE_VOICECLAW_MOBILE_SCHEME
+  return fromEnv && fromEnv.length > 0 ? fromEnv : DEFAULT_MOBILE_SCHEME
+}
 
 export function DevicesCard() {
   const [devices, setDevices] = useState<DeviceListRow[]>([])
@@ -44,57 +59,137 @@ export function DevicesCard() {
     void refresh()
   }, [refresh])
 
-  const startPairing = useCallback(() => {
-    setPairing({ kind: 'naming', label: '', submitting: false, error: null })
-  }, [])
+  // Race-guard: rapid Pair → Cancel → Pair must never paste the first
+  // token into the second modal. We bump a counter on every open and
+  // ignore async results whose counter no longer matches.
+  const pairAttemptRef = useRef(0)
 
+  const startPairing = useCallback(async () => {
+    const api = window.electronAPI?.devices
+    if (!api) {
+      setPairing({ kind: 'error', error: 'Device pairing bridge unavailable.' })
+      return
+    }
+    const attempt = ++pairAttemptRef.current
+    const label = buildDefaultLabel()
+    setPairing({ kind: 'minting', label })
+    try {
+      const result = await api.create(label)
+      if (pairAttemptRef.current !== attempt) {
+        if (result.ok) void api.revoke(result.id).catch(() => {})
+        return
+      }
+      if (!result.ok) {
+        setPairing({ kind: 'error', error: result.error })
+        return
+      }
+      const deeplink = buildPairDeeplink(getMobileScheme(), {
+        url: result.payload.url,
+        token: result.plaintext,
+        label: result.label,
+      })
+      const qrDataUrl = await QRCode.toDataURL(deeplink, {
+        errorCorrectionLevel: 'M',
+        margin: 1,
+        scale: 6,
+        color: { dark: '#000000', light: '#ffffff' },
+      })
+      if (pairAttemptRef.current !== attempt) {
+        void api.revoke(result.id).catch(() => {})
+        return
+      }
+      setPairing({
+        kind: 'paired',
+        created: result,
+        qrDataUrl,
+        deeplink,
+        label: result.label,
+        labelDirty: false,
+        copied: null,
+        confirmed: false,
+      })
+      await refresh()
+    } catch (err) {
+      if (pairAttemptRef.current !== attempt) return
+      setPairing({
+        kind: 'error',
+        error: err instanceof Error ? err.message : 'Could not create device.',
+      })
+    }
+  }, [refresh])
+
+  // Cancel = user backed out without saying "Done". Auto-revoke the
+  // pending token so we don't leak orphan rows.
   const cancelPairing = useCallback(() => {
+    pairAttemptRef.current++
+    setPairing((prev) => {
+      if (prev.kind === 'paired' && !prev.confirmed) {
+        const api = window.electronAPI?.devices
+        if (api) {
+          void api.revoke(prev.created.id).then(() => refresh()).catch(() => {})
+        }
+      }
+      return { kind: 'idle' }
+    })
+  }, [refresh])
+
+  const confirmPairing = useCallback(() => {
+    setPairing((prev) => (prev.kind === 'paired' ? { ...prev, confirmed: true } : prev))
     setPairing({ kind: 'idle' })
   }, [])
 
-  const confirmLabel = useCallback(
-    async (label: string) => {
-      const api = window.electronAPI?.devices
-      if (!api) return
-      const trimmed = label.trim()
-      if (trimmed.length === 0) {
-        setPairing((p) =>
-          p.kind === 'naming' ? { ...p, error: 'Give the device a name.' } : p,
-        )
-        return
-      }
-      setPairing((p) => (p.kind === 'naming' ? { ...p, submitting: true, error: null } : p))
-      try {
-        const result = await api.create(trimmed)
-        if (!result.ok) {
-          setPairing((p) =>
-            p.kind === 'naming' ? { ...p, submitting: false, error: result.error } : p,
-          )
-          return
-        }
-        const payloadJson = JSON.stringify(result.payload)
-        const qrDataUrl = await QRCode.toDataURL(payloadJson, {
-          errorCorrectionLevel: 'M',
-          margin: 1,
-          scale: 6,
-          color: { dark: '#000000', light: '#ffffff' },
-        })
-        setPairing({ kind: 'paired', created: result, qrDataUrl, copied: null })
-        await refresh()
-      } catch (err) {
-        setPairing((p) =>
-          p.kind === 'naming'
-            ? {
-                ...p,
-                submitting: false,
-                error: err instanceof Error ? err.message : 'Could not create device.',
-              }
-            : p,
-        )
-      }
-    },
-    [refresh],
-  )
+  // Inline label edit while the QR modal is open. The renamed label
+  // is persisted via the existing devices:rename IPC so the row in the
+  // list stays in sync, and the deeplink/QR are regenerated.
+  const updatePairLabel = useCallback(async (next: string) => {
+    setPairing((p) => (p.kind === 'paired' ? { ...p, label: next, labelDirty: true } : p))
+  }, [])
+
+  const commitPairLabel = useCallback(async () => {
+    const api = window.electronAPI?.devices
+    if (!api) return
+    let current: Extract<PairingState, { kind: 'paired' }> | null = null
+    setPairing((p) => {
+      if (p.kind === 'paired') current = p
+      return p
+    })
+    if (!current) return
+    const trimmed = current.label.trim()
+    if (trimmed.length === 0 || trimmed === current.created.label) return
+    const result = await api.rename(current.created.id, trimmed)
+    if (!result.ok) {
+      setPairing((p) => (p.kind === 'paired' ? { ...p, label: p.created.label, labelDirty: false } : p))
+      return
+    }
+    const deeplink = buildPairDeeplink(getMobileScheme(), {
+      url: current.created.payload.url,
+      token: current.created.plaintext,
+      label: trimmed,
+    })
+    try {
+      const qrDataUrl = await QRCode.toDataURL(deeplink, {
+        errorCorrectionLevel: 'M',
+        margin: 1,
+        scale: 6,
+        color: { dark: '#000000', light: '#ffffff' },
+      })
+      setPairing((p) =>
+        p.kind === 'paired'
+          ? {
+              ...p,
+              deeplink,
+              qrDataUrl,
+              label: trimmed,
+              labelDirty: false,
+              created: { ...p.created, label: trimmed },
+            }
+          : p,
+      )
+      await refresh()
+    } catch {
+      // QR regen failure is non-fatal — keep the previous QR.
+    }
+  }, [refresh])
 
   const copyText = useCallback(async (text: string, which: 'token' | 'url') => {
     try {
@@ -161,7 +256,7 @@ export function DevicesCard() {
               revoke one without affecting the others.
             </p>
           </div>
-          <Button variant="default" size="sm" onClick={startPairing}>
+          <Button variant="default" size="sm" onClick={() => void startPairing()}>
             Pair a device
           </Button>
         </div>
@@ -239,26 +334,35 @@ export function DevicesCard() {
         )}
       </Card>
 
-      {pairing.kind === 'naming' && (
-        <PairNamingModal
-          label={pairing.label}
-          submitting={pairing.submitting}
-          error={pairing.error}
-          onChange={(v) =>
-            setPairing((p) => (p.kind === 'naming' ? { ...p, label: v, error: null } : p))
-          }
-          onSubmit={() => void confirmLabel(pairing.label)}
-          onClose={cancelPairing}
-        />
+      {pairing.kind === 'minting' && (
+        <ModalShell onClose={cancelPairing}>
+          <h4 className="text-sm font-semibold text-foreground">Pair a device</h4>
+          <p className="text-xs text-muted-foreground">Generating QR…</p>
+        </ModalShell>
+      )}
+
+      {pairing.kind === 'error' && (
+        <ModalShell onClose={cancelPairing}>
+          <h4 className="text-sm font-semibold text-foreground">Pair a device</h4>
+          <p className="text-xs text-destructive" role="alert">{pairing.error}</p>
+          <div className="flex justify-end pt-2">
+            <Button variant="default" size="sm" onClick={cancelPairing}>Close</Button>
+          </div>
+        </ModalShell>
       )}
 
       {pairing.kind === 'paired' && (
         <PairQrModal
           created={pairing.created}
           qrDataUrl={pairing.qrDataUrl}
+          deeplink={pairing.deeplink}
+          label={pairing.label}
           copied={pairing.copied}
+          onLabelChange={(v) => void updatePairLabel(v)}
+          onLabelCommit={() => void commitPairLabel()}
           onCopy={(text, which) => void copyText(text, which)}
-          onClose={cancelPairing}
+          onCancel={cancelPairing}
+          onConfirm={confirmPairing}
         />
       )}
     </>
@@ -298,80 +402,50 @@ function RenameRow({
   )
 }
 
-function PairNamingModal({
-  label,
-  submitting,
-  error,
-  onChange,
-  onSubmit,
-  onClose,
-}: {
-  label: string
-  submitting: boolean
-  error: string | null
-  onChange: (v: string) => void
-  onSubmit: () => void
-  onClose: () => void
-}) {
-  return (
-    <ModalShell onClose={onClose}>
-      <h4 className="text-sm font-semibold text-foreground">Pair a device</h4>
-      <p className="text-xs text-muted-foreground">
-        Name the device you're about to pair. You'll scan the QR on the next step.
-      </p>
-      <div className="space-y-1.5">
-        <label className="text-xs text-muted-foreground">Device name</label>
-        <Input
-          autoFocus
-          value={label}
-          onChange={(e) => onChange(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && !submitting) onSubmit()
-            else if (e.key === 'Escape') onClose()
-          }}
-          placeholder="iPhone 15"
-        />
-      </div>
-      {error && (
-        <p className="text-xs text-destructive" role="alert">
-          {error}
-        </p>
-      )}
-      <div className="flex justify-end gap-2 pt-2">
-        <Button variant="ghost" size="sm" onClick={onClose} disabled={submitting}>
-          Cancel
-        </Button>
-        <Button variant="default" size="sm" onClick={onSubmit} disabled={submitting}>
-          {submitting ? 'Generating…' : 'Generate QR'}
-        </Button>
-      </div>
-    </ModalShell>
-  )
-}
-
 function PairQrModal({
   created,
   qrDataUrl,
+  deeplink,
+  label,
   copied,
+  onLabelChange,
+  onLabelCommit,
   onCopy,
-  onClose,
+  onCancel,
+  onConfirm,
 }: {
   created: Extract<DeviceCreateResult, { ok: true }>
   qrDataUrl: string
+  deeplink: string
+  label: string
   copied: 'token' | 'url' | null
+  onLabelChange: (v: string) => void
+  onLabelCommit: () => void
   onCopy: (text: string, which: 'token' | 'url') => void
-  onClose: () => void
+  onCancel: () => void
+  onConfirm: () => void
 }) {
   return (
-    <ModalShell onClose={onClose}>
+    <ModalShell onClose={onCancel}>
       <div className="space-y-1">
-        <h4 className="text-sm font-semibold text-foreground">
-          Scan from {created.label}
-        </h4>
+        <h4 className="text-sm font-semibold text-foreground">Pair a device</h4>
         <p className="text-xs text-muted-foreground">
-          Open VoiceClaw on the device and scan this code. The token is shown once —
-          copy it now if you need a manual fallback.
+          Scan with your iPhone's Camera app — tap the prompt to open VoiceClaw and
+          finish pairing. The token is shown once; copy it for a manual fallback.
         </p>
+      </div>
+
+      <div className="space-y-1.5">
+        <label className="text-xs text-muted-foreground">Device name</label>
+        <Input
+          value={label}
+          onChange={(e) => onLabelChange(e.target.value)}
+          onBlur={() => onLabelCommit()}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
+          }}
+          placeholder="iPhone 15"
+        />
       </div>
 
       <div className="flex justify-center">
@@ -408,23 +482,26 @@ function PairQrModal({
 
       <div className="space-y-1.5">
         <div className="flex items-center justify-between">
-          <label className="text-xs text-muted-foreground">Relay URL</label>
+          <label className="text-xs text-muted-foreground">Pairing link</label>
           <button
             type="button"
-            onClick={() => onCopy(created.payload.url, 'url')}
+            onClick={() => onCopy(deeplink, 'url')}
             className="text-[11px] text-muted-foreground underline underline-offset-2 hover:text-foreground"
-            disabled={!created.payload.url}
+            disabled={!deeplink}
           >
             {copied === 'url' ? 'Copied!' : 'Copy'}
           </button>
         </div>
         <code className="block break-all rounded-md border border-input bg-muted px-3 py-2 text-[11px] font-mono text-foreground select-all">
-          {created.payload.url || '(no network detected)'}
+          {deeplink || '(no network detected)'}
         </code>
       </div>
 
-      <div className="flex justify-end pt-2">
-        <Button variant="default" size="sm" onClick={onClose}>
+      <div className="flex justify-end gap-2 pt-2">
+        <Button variant="ghost" size="sm" onClick={onCancel}>
+          Cancel
+        </Button>
+        <Button variant="default" size="sm" onClick={onConfirm}>
           Done
         </Button>
       </div>
