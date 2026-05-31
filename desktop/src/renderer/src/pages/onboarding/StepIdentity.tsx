@@ -24,6 +24,8 @@ type Props = {
   onStartOver?: () => void
   initialIdentity?: { name?: string; description?: string; voice?: string }
   previewMode?: boolean
+  stepNumber?: number
+  totalSteps?: number
 }
 
 export function StepIdentity({
@@ -32,6 +34,8 @@ export function StepIdentity({
   onStartOver,
   initialIdentity = {},
   previewMode = false,
+  stepNumber = 6,
+  totalSteps = 6,
 }: Props) {
   const [name, setName] = useState(initialIdentity.name ?? DEFAULT_NAME)
   const [description, setDescription] = useState(initialIdentity.description ?? DEFAULT_DESCRIPTION)
@@ -120,9 +124,9 @@ export function StepIdentity({
 
   return (
     <StepFrame
-      stepIndex={6}
-      totalSteps={7}
-      eyebrow="06 / Voice"
+      stepIndex={stepNumber}
+      totalSteps={totalSteps}
+      eyebrow={`${String(stepNumber).padStart(2, '0')} / Voice`}
       title="Give your agent a name and a voice."
       description="Pick how they'll sound and feel. You can change all of this later in Settings."
       primaryAction={{ label: 'Continue', onClick: handleContinue }}

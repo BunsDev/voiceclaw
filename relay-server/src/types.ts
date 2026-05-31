@@ -3,6 +3,7 @@
 // Client → Relay events
 export type ClientEvent =
   | SessionConfigEvent
+  | SessionAuthEvent
   | AudioAppendEvent
   | AudioAppendCaptureOnlyEvent
   | AudioCommitEvent
@@ -12,6 +13,23 @@ export type ClientEvent =
   | ToolResultEvent
   | ClientTimingEvent
   | TextInputEvent
+  | MintTokenEvent
+  | ToolExecEvent
+  | SessionPrepEvent
+
+// One-shot auth handshake used by the direct-to-provider path. Sending a
+// session.config with a valid apiKey is the alternate path (it also flips the
+// authed flag). The relay closes the socket on any privileged message that
+// arrives before either has succeeded.
+export interface SessionAuthEvent {
+  type: "session.auth"
+  apiKey: string
+  // Optional self-reported device name (e.g. `Device.deviceName` or
+  // `Device.modelName` from expo-device). The relay forwards this to
+  // the desktop bridge so a freshly paired row stops reading
+  // "New device · 11:23 AM".
+  deviceName?: string
+}
 
 export interface SessionConfigEvent {
   type: "session.config"
@@ -37,6 +55,52 @@ export interface SessionConfigEvent {
   watchdog?: "enabled" | "disabled"
   instructionsOverride?: string
   conversationHistory?: { role: "user" | "assistant", text: string, timestamp?: number, relativeMs?: number }[]
+  // Historical flag — direct tools (read/write/edit/bash) are now always
+  // advertised; this field is accepted for wire-compat but no longer gates
+  // anything. Kept so older clients can still send it without error.
+  experimentalDirectTools?: boolean
+  // How the realtime voice model gets its capabilities.
+  //   - "direct"     (default) — relay advertises read/write/edit/bash +
+  //                  web_search; the model uses them directly.
+  //   - "operator"   — relay advertises ask_brain (+ web_search) instead and
+  //                  delegates multi-step work to the agent backend selected
+  //                  by agentBackend.
+  //   - "supervisor" — SCAFFOLD: a supervisor agent monitors and steers the
+  //                  live conversation. Not yet implemented; runtime falls
+  //                  back to "direct" behavior.
+  voiceMode?: VoiceMode
+  // Which host-side agent backs operator/supervisor mode. Peer dependency:
+  // the relay assumes the user has the corresponding CLI installed locally.
+  // SCAFFOLD: the wire field is honored and logged, but the per-backend host
+  // invocation (pi-mono / codex / hermes) is not yet wired in — operator mode
+  // currently routes through the existing openclaw/brain gateway regardless
+  // of the value here. See relay-server/src/agents.ts.
+  agentBackend?: AgentBackend
+  // See SessionAuthEvent.deviceName — accepted on session.config too so
+  // clients that skip the auth handshake still get auto-identified.
+  deviceName?: string
+}
+
+export type VoiceMode = "direct" | "operator" | "supervisor"
+export const DEFAULT_VOICE_MODE: VoiceMode = "direct"
+export const VOICE_MODES: readonly VoiceMode[] = ["direct", "operator", "supervisor"]
+
+export type AgentBackend = "pi" | "openai" | "hermes"
+export const DEFAULT_AGENT_BACKEND: AgentBackend = "pi"
+export const AGENT_BACKENDS: readonly AgentBackend[] = ["pi", "openai", "hermes"]
+
+export function resolveVoiceMode(value: unknown): VoiceMode {
+  if (value === "operator" || value === "supervisor" || value === "direct") {
+    return value
+  }
+  return DEFAULT_VOICE_MODE
+}
+
+export function resolveAgentBackend(value: unknown): AgentBackend {
+  if (value === "pi" || value === "openai" || value === "hermes") {
+    return value
+  }
+  return DEFAULT_AGENT_BACKEND
 }
 
 export interface AudioAppendEvent {
@@ -121,6 +185,17 @@ export type RelayEvent =
   | ToolCancelledEvent
   | BrainResultEvent
   | ErrorEvent
+  | TokenEvent
+  | TokenErrorEvent
+  | StandaloneToolResultEvent
+  | StandaloneToolErrorEvent
+  | SessionPrepResultEvent
+  | SessionPrepErrorEvent
+  | SessionAuthOkEvent
+
+export interface SessionAuthOkEvent {
+  type: "session.auth.ok"
+}
 
 export interface SessionReadyEvent {
   type: "session.ready"
@@ -285,4 +360,93 @@ export interface ErrorEvent {
   actionUrl?: string | null
   actionLabel?: string
   httpStatus?: number | null
+}
+
+// "Direct to provider" capabilities — clients connecting straight to Gemini for
+// audio still talk to the relay for two things: minting an ephemeral provider
+// auth token (mint_token → token) and delegating tool execution back to the
+// desktop (tool.exec → tool.progress* → tool.result | tool.error). Both work
+// on the same /ws route and do NOT require session.config.
+
+export interface MintTokenEvent {
+  type: "mint_token"
+  provider: "gemini" | "openai" | "xai"
+  model?: string
+}
+
+export interface TokenEvent {
+  type: "token"
+  provider: "gemini"
+  token: string
+  // Wall-clock ms epoch at which the token stops being usable to start new
+  // sessions. Clients should refresh before this.
+  expiresAt: number
+  // Always true on the wire — the relay no longer falls back to the raw
+  // GEMINI_API_KEY when the auth_tokens endpoint fails; it returns a
+  // token.error instead. Kept on the interface so old clients can still
+  // type-check the field they branch on.
+  ephemeral: true
+  model?: string
+}
+
+export interface TokenErrorEvent {
+  type: "token.error"
+  provider: "gemini" | "openai" | "xai"
+  message: string
+}
+
+export interface ToolExecEvent {
+  type: "tool.exec"
+  callId: string
+  name: "read" | "write" | "edit" | "bash"
+  // JSON-encoded argument object — same shape the in-session direct tools
+  // accept (read: {path, offset?, limit?}; write: {path, content};
+  // edit: {path, old_string, new_string, replace_all?};
+  // bash: {command, timeout_ms?, background?}).
+  arguments: string
+}
+
+export interface StandaloneToolResultEvent {
+  type: "tool.result"
+  callId: string
+  name: string
+  result: string
+  durationMs: number
+}
+
+export interface StandaloneToolErrorEvent {
+  type: "tool.error"
+  callId: string
+  name: string
+  error: string
+  durationMs?: number
+}
+
+// "Direct to provider" — when the mobile client opens its own WS straight to
+// Gemini Live, it still needs the system instructions (identity / SOUL / facts
+// / memory preamble + tools guidance) and the function declarations the relay
+// would have wired in. Only the relay can assemble these (workspace, env). The
+// client sends session.prep with the same fields it would have sent as
+// session.config; the relay replies with the built instructions string and the
+// Gemini-shaped tool declarations to splice into the upstream setup message.
+export interface SessionPrepEvent {
+  type: "session.prep"
+  config: SessionConfigEvent
+}
+
+interface GeminiFunctionDeclaration {
+  name: string
+  description: string
+  parameters: Record<string, unknown>
+}
+
+export interface SessionPrepResultEvent {
+  type: "session.prep.result"
+  instructions: string
+  tools: GeminiFunctionDeclaration[]
+}
+
+export interface SessionPrepErrorEvent {
+  type: "session.prep.error"
+  message: string
 }

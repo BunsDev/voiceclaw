@@ -4,14 +4,21 @@ import { Mark } from './Mark'
 type Props = {
   onContinue?: () => void
   onStartOver?: () => void
+  stepNumber?: number
+  totalSteps?: number
 }
 
-export function StepWelcome({ onContinue, onStartOver }: Props) {
+export function StepWelcome({
+  onContinue,
+  onStartOver,
+  stepNumber = 1,
+  totalSteps = 6,
+}: Props) {
   return (
     <StepFrame
-      stepIndex={1}
-      totalSteps={6}
-      eyebrow="01 / Welcome"
+      stepIndex={stepNumber}
+      totalSteps={totalSteps}
+      eyebrow={`${String(stepNumber).padStart(2, '0')} / Welcome`}
       title={
         <>
           Voice for the agent

@@ -5,32 +5,36 @@ import { Button } from '@/components/ui/button'
 import { Icon } from '@/components/ui/icon'
 import { Input } from '@/components/ui/input'
 import { Text } from '@/components/ui/text'
-import { addMessage, createConversation, getLatestConversation, getMessages, getSetting, type Message, type LatencyData, type ProviderInfo } from '@/db'
-import { getApiConfig, streamRealtimeText } from '@/lib/chat'
+import { addMessage, createConversation, getLatestConversation, getMessages, getSetting, type Message, type ProviderInfo } from '@/db'
+import { streamRealtimeText } from '@/lib/chat'
 import { BRAND } from '@/lib/brand'
-import { compactMessages } from '@/lib/compact'
 import { useConversationContext } from '@/lib/conversation-context'
 import { maybeGenerateTitle } from '@/lib/title'
 import { useCallSounds } from '@/lib/sounds'
-import { usePipeline } from '@/lib/use-pipeline'
-import { useRealtime, getProviderForRealtimeModel, type RmsMetrics } from '@/lib/use-realtime'
-import { useTranscriptBuffer } from '@/lib/use-transcript-buffer'
+import { useRealtime, getProviderForRealtimeModel, type RealtimeCallbacks, type RealtimeConfig, type RmsMetrics } from '@/lib/use-realtime'
+import { useDirectGemini } from '@/lib/use-direct-gemini'
+import { DEFAULT_REALTIME_SERVER_URL } from '@/lib/relay-config'
 import { useAutoReconnect } from '@/lib/use-auto-reconnect'
-import ExpoCustomPipelineModule from '@/modules/expo-custom-pipeline/src/ExpoCustomPipelineModule'
 import ExpoRealtimeAudioModule from '@/modules/expo-realtime-audio/src/ExpoRealtimeAudioModule'
-import ExpoVapiModule from '@/modules/expo-vapi'
-import type { FunctionCallEvent, SpeechEvent, TranscriptEvent } from '@/modules/expo-vapi'
 import { Stack } from 'expo-router'
 import { MicIcon, MicOffIcon, PhoneOffIcon, PlusIcon, RefreshCwIcon, SendIcon, XIcon } from 'lucide-react-native'
 import { useColorScheme } from 'nativewind'
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { ActivityIndicator, Animated, FlatList, Image, KeyboardAvoidingView, Platform, Pressable, View } from 'react-native'
+import { ActivityIndicator, Animated, FlatList, Image, KeyboardAvoidingView, NativeScrollEvent, NativeSyntheticEvent, Platform, Pressable, View } from 'react-native'
 
 const MD_IMAGE_REGEX = /!\[([^\]]*)\]\(([^)]+)\)/g
 const URL_IMAGE_REGEX = /(?:^|\s)(https?:\/\/\S+\.(?:png|jpg|jpeg|gif|webp)(?:\?\S*)?)/gi
 const THINKING_MESSAGE_ID = -2
 const LISTENING_MESSAGE_ID = -3
 const DEFAULT_REALTIME_MODEL = 'gemini-3.1-flash-live-preview'
+const PAIR_NEEDED_MESSAGE = [
+  "This device isn't paired with your VoiceClaw desktop yet.",
+  '',
+  'On your Mac: open VoiceClaw → Settings → Devices → Pair a device.',
+  'Then open the iPhone Camera and scan the QR — it\'ll bring you right back here.',
+  '',
+  'Already paired? Re-pair from the same screen and tap the new QR.',
+].join('\n')
 const REALTIME_MODELS = [
   'gemini-3.1-flash-live-preview',
   'grok-voice-think-fast-1.0',
@@ -52,75 +56,10 @@ const OPENAI_REALTIME_VOICES = [
   'verse',
 ] as const
 
-const VOICE_SYSTEM_PROMPT = `\
-You are on a live voice call. Keep responses concise and conversational — short \
-sentences, natural speech. No bullet lists, no code blocks. Speak like a human \
-in a phone call. Your identity, personality, and capabilities are defined in \
-your system files.
-
-For long-running tasks (image generation, web searches, file operations, etc.), \
-delegate to a sub-agent so the user gets an immediate response and can keep \
-talking. Acknowledge the request quickly ("On it, generating that now") and let \
-the background work complete asynchronously.
-
-When sharing images or URLs, include them as markdown (e.g. ![description](url)) \
-but never speak the URL aloud — just describe what you created or found.
-
-## Display Tool
-
-You have a \`displayText\` function that writes content to the user's screen \
-WITHOUT it being spoken aloud. Use it for:
-- URLs, links, or code snippets
-- Long text the user asked you to write (emails, summaries, lists)
-- Image markdown (![desc](url))
-- Any content better read than heard
-
-After calling displayText, briefly tell the user verbally, e.g. "I've put that \
-on your screen" or "Check your display". Keep the spoken part short — the detail \
-is on screen.`
-
-const DISPLAY_TEXT_FUNCTION = {
-  name: 'displayText',
-  description: 'Write content to the user\'s screen without it being spoken aloud by TTS. Use for URLs, code, long text, images, or anything better read than heard.',
-  parameters: {
-    type: 'object',
-    properties: {
-      text: {
-        type: 'string',
-        description: 'The content to display. Supports markdown including image syntax ![alt](url).',
-      },
-      title: {
-        type: 'string',
-        description: 'Optional short title shown above the content.',
-      },
-    },
-    required: ['text'],
-  },
-}
-
 type ContentPart = { type: 'text', text: string } | { type: 'image', url: string, alt: string }
-type PipelineDebugPhase = 'idle' | 'listening' | 'thinking' | 'speaking'
 type DisplayItem =
   | { kind: 'message', message: Message }
   | { kind: 'tool_call', item: ToolCallItem }
-
-const INITIAL_PIPELINE_DEBUG_STATE = {
-  phase: 'idle' as PipelineDebugPhase,
-  transcriptCount: 0,
-  llmTokenCount: 0,
-  llmCompleteCount: 0,
-  assistantResponseCount: 0,
-  speakRequestCount: 0,
-  ttsStartCount: 0,
-  errorCount: 0,
-  interruptCount: 0,
-  ttsProvider: 'unknown',
-  lastUserTranscript: 'none',
-  lastLLMText: 'none',
-  lastAssistantResponse: 'none',
-  lastSpeakRequest: 'none',
-  lastError: 'none',
-}
 
 export default function ChatScreen() {
   const { colorScheme } = useColorScheme()
@@ -138,178 +77,45 @@ export default function ChatScreen() {
   const [debugMode, setDebugMode] = useState(false)
   const [streamingRole, setStreamingRole] = useState<'user' | 'assistant'>('assistant')
   const [isUserSpeaking, setIsUserSpeaking] = useState(false)
+  const [terminalError, setTerminalError] = useState<'pair' | 'connection' | null>(null)
   const flatListRef = useRef<FlatList<DisplayItem>>(null)
-  const hasScrolledRef = useRef(false)
+  const initialLoadGraceRef = useRef(true)
+  const isPinnedToBottomRef = useRef(true)
   const { playJoin, playEnd, startThinking, stopThinking } = useCallSounds()
   const soundsRef = useRef({ playJoin, playEnd, startThinking, stopThinking })
   soundsRef.current = { playJoin, playEnd, startThinking, stopThinking }
   const { selectedConversationId, clearSelection } = useConversationContext()
-  const userInitiatedEndRef = useRef(false)
-  const wasCallActiveRef = useRef(false)
-  const lastCallOverridesRef = useRef<Record<string, unknown> | null>(null)
-  const lastAssistantIdRef = useRef<string | null>(null)
-  const pendingLatencyRef = useRef<LatencyData | null>(null)
-  const activeVoiceModeRef = useRef<'vapi' | 'custom' | 'realtime'>('realtime')
   const activeProvidersRef = useRef<ProviderInfo | null>(null)
   const cancelReconnectRef = useRef<(() => void) | null>(null)
   const triggerReconnectRef = useRef<(() => void) | null>(null)
-  const [pipelineDebugState, setPipelineDebugState] = useState(INITIAL_PIPELINE_DEBUG_STATE)
+  const pairNeededShownRef = useRef(false)
+  const connectionErrorShownRef = useRef(false)
   const [rmsMetrics, setRmsMetrics] = useState<RmsMetrics | null>(null)
   const conversationIdRef = useRef<number | null>(null)
   conversationIdRef.current = conversationId
-
-  // Vapi latency tracking refs
-  const vapiUserSpeechEndTimeRef = useRef<number | null>(null)
-  const vapiUserFinalTranscriptTimeRef = useRef<number | null>(null)
-  const vapiAssistantFirstTokenTimeRef = useRef<number | null>(null)
-  const vapiPendingLatencyRef = useRef<LatencyData>({})
 
   // Refs for pipeline callbacks that need fresh closure values
   const loadMessagesRef = useRef<() => Promise<void>>(async () => {})
   const startRealtimeCallRef = useRef<() => Promise<boolean>>(async () => false)
 
-  const resetPipelineDebugState = useCallback(() => {
-    setPipelineDebugState(INITIAL_PIPELINE_DEBUG_STATE)
-  }, [])
+  // 'direct' = phone ↔ Gemini Live directly (beta), 'relay' = phone ↔ desktop
+  // relay-proxy (default). Set per call in startRealtimeCall; toggleMute and
+  // stopRealtimeCall route through the active mode.
+  const activeModeRef = useRef<'direct' | 'relay'>('relay')
+  // Snapshot of the config used for the current call so we can rebuild a relay
+  // start() if direct-mode setup fails after we already committed to it.
+  const lastConfigRef = useRef<RealtimeConfig | null>(null)
+  const fallbackToRelayRef = useRef<((reason: string) => void) | null>(null)
 
-  const setPipelineDebugPhase = useCallback((phase: PipelineDebugPhase) => {
-    setPipelineDebugState((current) => ({ ...current, phase }))
-  }, [])
-
-  const simulatePipelineTranscript = useCallback((text: string) => {
-    if (!isCallActive || activeVoiceModeRef.current !== 'custom') return
-    ExpoCustomPipelineModule.simulateFinalTranscript(text)
-  }, [isCallActive])
-
-  const pipeline = usePipeline({
-    getConversationId: () => conversationIdRef.current,
-    buildMessages: async (userText) => {
-      const convId = conversationIdRef.current
-      if (!convId) return [{ role: 'user', content: userText }]
-
-      const { apiKey, apiUrl, model } = await getApiConfig()
-      if (!apiKey || !apiUrl) return [{ role: 'user', content: userText }]
-
-      const dbMessages = await getMessages(convId)
-      const compacted = await compactMessages(convId, dbMessages, apiKey, model, apiUrl)
-      const llmMessages = compacted
-        .filter((message) => message.role === 'user' || message.role === 'assistant')
-        .map((message) => ({ role: message.role, content: message.content }))
-
-      const lastMessage = llmMessages[llmMessages.length - 1]
-      if (lastMessage?.role === 'user' && lastMessage.content === userText) {
-        return llmMessages
-      }
-
-      return [...llmMessages, { role: 'user', content: userText }]
-    },
-    onPartialTranscript: (text) => {
-      setStreamingRole('user')
-      setStreamingText(text)
-      setPipelineDebugPhase('listening')
-    },
-    onFinalTranscript: (text) => {
-      console.log('[CustomPipeline] Final transcript:', text?.substring(0, 50))
-      setStreamingText(null)
-      setPipelineDebugState((current) => ({
-        ...current,
-        phase: 'thinking',
-        transcriptCount: current.transcriptCount + 1,
-        lastUserTranscript: text,
-      }))
-      const convId = conversationIdRef.current
-      if (convId) {
-        addMessage(convId, 'user', text, undefined, activeProvidersRef.current ?? undefined).then(() => {
-          loadMessagesRef.current()
-          maybeGenerateTitle(convId)
-        })
-      }
-      setIsThinking(true)
-      soundsRef.current.startThinking()
-    },
-    onLLMToken: (text) => {
-      setStreamingRole('assistant')
-      setStreamingText(text)
-      setIsThinking(false)
-      soundsRef.current.stopThinking()
-      setPipelineDebugState((current) => ({
-        ...current,
-        llmTokenCount: current.llmTokenCount + 1,
-        lastLLMText: text,
-      }))
-    },
-    onLLMComplete: (text) => {
-      setPipelineDebugState((current) => ({
-        ...current,
-        llmCompleteCount: current.llmCompleteCount + 1,
-        lastLLMText: text || '<empty>',
-      }))
-    },
-    onAssistantResponse: (text) => {
-      console.log('[CustomPipeline] Assistant response:', text?.substring(0, 50))
-      setIsThinking(false)
-      setStreamingText(null)
-      soundsRef.current.stopThinking()
-      setPipelineDebugState((current) => ({
-        ...current,
-        assistantResponseCount: current.assistantResponseCount + 1,
-        lastAssistantResponse: text || '<empty>',
-      }))
-      const convId = conversationIdRef.current
-      if (convId && text) {
-        addMessage(convId, 'assistant', text, pendingLatencyRef.current ?? undefined, activeProvidersRef.current ?? undefined).then(() => {
-          pendingLatencyRef.current = null
-          loadMessagesRef.current()
-        })
-      }
-    },
-    onSpeakRequested: (text) => {
-      setPipelineDebugState((current) => ({
-        ...current,
-        speakRequestCount: current.speakRequestCount + 1,
-        lastSpeakRequest: text,
-      }))
-    },
-    onTTSStart: () => {
-      console.log('[CustomPipeline] TTS started')
-      setIsThinking(false)
-      soundsRef.current.stopThinking()
-      setPipelineDebugState((current) => ({
-        ...current,
-        phase: 'speaking',
-        ttsStartCount: current.ttsStartCount + 1,
-      }))
-    },
-    onTTSComplete: () => {
-      console.log('[CustomPipeline] TTS complete')
-    },
-    onError: (message) => {
-      console.error('[CustomPipeline]', message)
-      setIsThinking(false)
-      setStreamingText(null)
-      soundsRef.current.stopThinking()
-      setPipelineDebugPhase('idle')
-      setPipelineDebugState((current) => ({
-        ...current,
-        errorCount: current.errorCount + 1,
-        lastError: message,
-      }))
-      const convId = conversationIdRef.current
-      if (convId) {
-        addMessage(convId, 'assistant', `Error: ${message}`).then(() => loadMessagesRef.current())
-      }
-    },
-    onLatencyUpdate: (latency) => {
-      pendingLatencyRef.current = latency
-    },
-  })
-
-  const realtime = useRealtime({
+  const sharedCallbacks: RealtimeCallbacks = {
     onSessionReady: (sessionId) => {
       console.log('[Realtime] Session ready:', sessionId)
       setIsCallActive(true)
       setIsConnecting(false)
+      setTerminalError(null)
       cancelReconnectRef.current?.()
+      pairNeededShownRef.current = false
+      connectionErrorShownRef.current = false
       soundsRef.current.playJoin()
       ExpoRealtimeAudioModule.startCapture()
     },
@@ -322,20 +128,77 @@ export default function ChatScreen() {
     },
     onToolCompleted: (callId, name, durationMs, result) => {
       setToolCalls((prev) => {
-        const existing = prev.get(callId)
-        if (!existing) return prev
         const next = new Map(prev)
-        next.set(callId, { ...existing, status: 'success', durationMs, result })
+        const existing = prev.get(callId)
+        if (existing) {
+          next.set(callId, { ...existing, status: 'success', durationMs, result })
+        } else {
+          next.set(callId, {
+            callId,
+            name,
+            args: '',
+            status: 'success',
+            startedAt: Date.now() - durationMs,
+            durationMs,
+            result,
+          })
+        }
         return next
       })
     },
     onToolFailed: (callId, name, durationMs, error, cancelled) => {
       setToolCalls((prev) => {
+        const next = new Map(prev)
+        const existing = prev.get(callId)
+        const status: ToolCallItem['status'] = cancelled ? 'cancelled' : 'error'
+        if (existing) {
+          next.set(callId, { ...existing, status, durationMs, error })
+        } else {
+          next.set(callId, {
+            callId,
+            name,
+            args: '',
+            status,
+            startedAt: Date.now() - durationMs,
+            durationMs,
+            error,
+          })
+        }
+        return next
+      })
+    },
+    onToolProgress: (callId, { textDelta, step, summary }) => {
+      setToolCalls((prev) => {
         const existing = prev.get(callId)
         if (!existing) return prev
         const next = new Map(prev)
-        next.set(callId, { ...existing, status: cancelled ? 'cancelled' : 'error', durationMs, error })
+        const latestStep = step ?? summary
+        next.set(callId, {
+          ...existing,
+          progressText: textDelta
+            ? (existing.progressText ?? '') + textDelta
+            : existing.progressText,
+          progressStep: latestStep ?? existing.progressStep,
+        })
         return next
+      })
+    },
+    onToolCancelled: (callIds) => {
+      setToolCalls((prev) => {
+        let changed = false
+        const next = new Map(prev)
+        const startedAt = Date.now()
+        for (const callId of callIds) {
+          const existing = next.get(callId)
+          if (!existing || existing.status !== 'in-progress') continue
+          next.set(callId, {
+            ...existing,
+            status: 'cancelled',
+            durationMs: startedAt - existing.startedAt,
+          })
+          changed = true
+        }
+        return changed ? next : prev
       })
     },
     onTranscriptDelta: (text, role) => {
@@ -369,20 +232,55 @@ export default function ChatScreen() {
     },
 
     onDisconnect: () => {
+      if (pairNeededShownRef.current) {
+        console.log('[Realtime] Disconnect after pair-needed; skipping auto-reconnect')
+        setIsConnecting(false)
+        setIsCallActive(false)
+        setIsThinking(false)
+        setIsUserSpeaking(false)
+        setTerminalError('pair')
+        return
+      }
       console.log('[Realtime] Unexpected disconnect, triggering auto-reconnect')
       triggerReconnectRef.current?.()
     },
     onError: (message, code) => {
       console.error(`[Realtime] Error (${code}): ${message}`)
+      const convId = conversationIdRef.current
       if (code === 401) {
-        const convId = conversationIdRef.current
-        if (convId) {
-          addMessage(convId, 'assistant', 'Authentication failed. Check your brain agent gateway URL and auth token in Settings.').then(() => loadMessagesRef.current())
+        cancelReconnectRef.current?.()
+        setIsConnecting(false)
+        setIsCallActive(false)
+        setIsThinking(false)
+        setIsUserSpeaking(false)
+        setTerminalError('pair')
+        if (convId && !pairNeededShownRef.current) {
+          pairNeededShownRef.current = true
+          addMessage(convId, 'assistant', PAIR_NEEDED_MESSAGE).then(() => loadMessagesRef.current())
         }
+        return
+      }
+      setIsConnecting(false)
+      setIsCallActive(false)
+      setIsThinking(false)
+      setIsUserSpeaking(false)
+      setTerminalError('connection')
+      if (convId && !connectionErrorShownRef.current) {
+        connectionErrorShownRef.current = true
+        addMessage(convId, 'assistant', `Couldn't reach your VoiceClaw desktop. Check that it's running and on the same network, then try again.`).then(() => loadMessagesRef.current())
       }
     },
     onRmsMetrics: (metrics) => {
       setRmsMetrics(metrics)
+    },
+  }
+
+  const realtime = useRealtime(sharedCallbacks)
+  const directGemini = useDirectGemini({
+    ...sharedCallbacks,
+    onDirectModeFailure: (reason) => {
+      console.warn('[Chat] Direct mode failed, falling back to relay-proxy:', reason)
+      fallbackToRelayRef.current?.(reason)
     },
   })
 
@@ -392,66 +290,14 @@ export default function ChatScreen() {
   }, [conversationId])
   loadMessagesRef.current = loadMessages
 
-  const handleTranscriptFlush = useCallback(async (role: 'user' | 'assistant', text: string) => {
-    if (!conversationId) return
-    if (__DEV__) console.log('[Chat] Transcript flush:', role, text.substring(0, 50))
-    try {
-      // Attach latency data to assistant messages from Custom Pipeline
-      const latency = role === 'assistant' ? pendingLatencyRef.current ?? undefined : undefined
-      if (role === 'assistant') pendingLatencyRef.current = null
-      await addMessage(conversationId, role, text, latency, activeProvidersRef.current ?? undefined)
-      await loadMessages()
-      maybeGenerateTitle(conversationId)
-    } catch (err) {
-      console.warn('[Chat] Failed to flush transcript:', err)
-    }
-  }, [conversationId, loadMessages])
-
-  const transcriptBuffer = useTranscriptBuffer({ onFlush: handleTranscriptFlush })
-  const transcriptBufferRef = useRef(transcriptBuffer)
-  transcriptBufferRef.current = transcriptBuffer
-
   const reconnectCall = useCallback(async () => {
-    const voiceMode = activeVoiceModeRef.current
-
-    if (voiceMode === 'realtime') {
-      console.log('[Chat] Reconnecting Realtime session')
-      setIsConnecting(true)
-      try {
-        const success = await startRealtimeCallRef.current()
-        if (!success) throw new Error('Realtime reconnect failed')
-      } catch (e) {
-        setIsConnecting(false)
-        throw e
-      }
-      return
-    }
-
-    // Vapi reconnect
-    const assistantId = lastAssistantIdRef.current
-    if (!assistantId) {
-      throw new Error('No previous call configuration to reconnect with')
-    }
-    const overrides = lastCallOverridesRef.current
+    console.log('[Chat] Reconnecting Realtime session')
     setIsConnecting(true)
-
-    // Safety timeout: reset isConnecting if onCallStart never fires after reconnect
-    if (connectingTimeoutRef.current) clearTimeout(connectingTimeoutRef.current)
-    connectingTimeoutRef.current = setTimeout(() => {
-      setIsConnecting((current) => {
-        if (current) console.warn('[Chat] Reconnect connecting timed out after 15s, resetting state')
-        return false
-      })
-    }, 15_000)
-
     try {
-      await ExpoVapiModule.startCall(assistantId, overrides ?? undefined)
+      const success = await startRealtimeCallRef.current()
+      if (!success) throw new Error('Realtime reconnect failed')
     } catch (e) {
       setIsConnecting(false)
-      if (connectingTimeoutRef.current) {
-        clearTimeout(connectingTimeoutRef.current)
-        connectingTimeoutRef.current = null
-      }
       throw e
     }
   }, [])
@@ -462,192 +308,30 @@ export default function ChatScreen() {
   cancelReconnectRef.current = cancelReconnect
   triggerReconnectRef.current = triggerReconnect
 
-  useEffect(() => {
-    const subs = [
-      ExpoVapiModule.addListener('onCallStart', () => {
-        console.log('[Chat] onCallStart fired')
-        if (connectingTimeoutRef.current) {
-          clearTimeout(connectingTimeoutRef.current)
-          connectingTimeoutRef.current = null
-        }
-        setIsCallActive(true)
-        setIsConnecting(false)
-        wasCallActiveRef.current = true
-        cancelReconnect()
-        soundsRef.current.playJoin()
-        // Reset Vapi latency tracking for fresh call
-        vapiUserSpeechEndTimeRef.current = null
-        vapiUserFinalTranscriptTimeRef.current = null
-        vapiAssistantFirstTokenTimeRef.current = null
-        vapiPendingLatencyRef.current = {}
-      }),
-      ExpoVapiModule.addListener('onCallEnd', async () => {
-        console.log('[Chat] onCallEnd fired')
-        if (connectingTimeoutRef.current) {
-          clearTimeout(connectingTimeoutRef.current)
-          connectingTimeoutRef.current = null
-        }
-        const wasActive = wasCallActiveRef.current
-        const wasUserInitiated = userInitiatedEndRef.current
-
-        // Store any accumulated Vapi latency before flushing
-        const vapiLatency = vapiPendingLatencyRef.current
-        if (vapiLatency.sttLatencyMs != null || vapiLatency.llmLatencyMs != null || vapiLatency.ttsLatencyMs != null) {
-          pendingLatencyRef.current = { ...vapiLatency }
-        }
-        vapiPendingLatencyRef.current = {}
-
-        // Flush any in-progress transcript buffers before cleanup
-        if (conversationId) {
-          const pending = transcriptBufferRef.current.flushAll()
-          for (const { role, text } of pending) {
-            console.log('[Chat] Flushing buffered transcript on call end:', role, text.substring(0, 50))
-            const latency = role === 'assistant' ? pendingLatencyRef.current ?? undefined : undefined
-            if (role === 'assistant') pendingLatencyRef.current = null
-            await addMessage(conversationId, role, text, latency, activeProvidersRef.current ?? undefined)
-          }
-          if (pending.length > 0) {
-            loadMessages()
-            maybeGenerateTitle(conversationId)
-          }
-        }
-
-        setIsCallActive(false)
-        setIsMuted(false)
-        setIsThinking(false)
-        setIsConnecting(false)
-        wasCallActiveRef.current = false
-        userInitiatedEndRef.current = false
-        activeProvidersRef.current = null
-        soundsRef.current.stopThinking()
-
-        if (wasActive && !wasUserInitiated) {
-          // Unexpected disconnect -- attempt auto-reconnect
-          console.log('[Chat] Unexpected disconnect detected, triggering auto-reconnect')
-          triggerReconnect()
-        } else {
-          // User-initiated end -- normal cleanup
-          soundsRef.current.playEnd()
-        }
-      }),
-      ExpoVapiModule.addListener('onTranscript', (event: TranscriptEvent) => {
-        console.log('[Chat] onTranscript:', event.role, event.type, event.text?.substring(0, 50))
-        if (event.type === 'final') {
-          transcriptBufferRef.current.onTranscriptFinal(event.role, event.text)
-        }
-
-        // Vapi latency tracking
-        if (event.type === 'final' && event.role === 'user') {
-          // STT latency: time from user speech end to final user transcript
-          if (vapiUserSpeechEndTimeRef.current != null) {
-            vapiPendingLatencyRef.current.sttLatencyMs = Date.now() - vapiUserSpeechEndTimeRef.current
-            vapiUserSpeechEndTimeRef.current = null
-          }
-          vapiUserFinalTranscriptTimeRef.current = Date.now()
-          // Reset assistant first-token tracker for the new turn
-          vapiAssistantFirstTokenTimeRef.current = null
-        }
-
-        if (event.role === 'assistant' && vapiAssistantFirstTokenTimeRef.current == null) {
-          // LLM latency: time from user's final transcript to first assistant output
-          if (vapiUserFinalTranscriptTimeRef.current != null) {
-            vapiPendingLatencyRef.current.llmLatencyMs = Date.now() - vapiUserFinalTranscriptTimeRef.current
-            vapiUserFinalTranscriptTimeRef.current = null
-          }
-          vapiAssistantFirstTokenTimeRef.current = Date.now()
-        }
-      }),
-      ExpoVapiModule.addListener('onSpeechStart', (event: SpeechEvent) => {
-        transcriptBufferRef.current.onSpeechStart(event.role)
-        if (event.role === 'assistant') {
-          setIsThinking(false)
-          soundsRef.current.stopThinking()
-          // Vapi latency tracking
-          const now = Date.now()
-          if (vapiAssistantFirstTokenTimeRef.current != null) {
-            // TTS latency: time from first assistant text to speech start
-            vapiPendingLatencyRef.current.ttsLatencyMs = now - vapiAssistantFirstTokenTimeRef.current
-          } else if (vapiUserFinalTranscriptTimeRef.current != null) {
-            // Speech started before any transcript -- count full time as LLM latency
-            vapiPendingLatencyRef.current.llmLatencyMs = now - vapiUserFinalTranscriptTimeRef.current
-            vapiUserFinalTranscriptTimeRef.current = null
-            vapiAssistantFirstTokenTimeRef.current = now
-          }
-        }
-      }),
-      ExpoVapiModule.addListener('onSpeechEnd', (event: SpeechEvent) => {
-        transcriptBufferRef.current.onSpeechEnd(event.role)
-        if (event.role === 'user') {
-          setIsThinking(true)
-          soundsRef.current.startThinking()
-          // Vapi latency: mark when user stopped speaking (STT timer starts)
-          vapiUserSpeechEndTimeRef.current = Date.now()
-        }
-        if (event.role === 'assistant') {
-          // Vapi latency: assistant turn is done — store accumulated latency for flush
-          const latency = vapiPendingLatencyRef.current
-          if (latency.sttLatencyMs != null || latency.llmLatencyMs != null || latency.ttsLatencyMs != null) {
-            pendingLatencyRef.current = { ...latency }
-          }
-          // Reset for next turn
-          vapiPendingLatencyRef.current = {}
-          vapiAssistantFirstTokenTimeRef.current = null
-        }
-      }),
-      ExpoVapiModule.addListener('onFunctionCall', async (event: FunctionCallEvent) => {
-        if (event.name === 'displayText' && conversationId) {
-          const text = (event.parameters.text as string) || ''
-          const title = event.parameters.title as string | undefined
-          const displayContent = title ? `**${title}**\n\n${text}` : text
-          await addMessage(conversationId, 'assistant', displayContent)
-          loadMessages()
-
-          try {
-            await ExpoVapiModule.sendFunctionCallResult(
-              'displayText',
-              JSON.stringify({ status: 'displayed', length: text.length })
-            )
-          } catch (e) {
-            console.warn('[DisplayText] Failed to send function call result:', e)
-          }
-        }
-      }),
-      ExpoVapiModule.addListener('onError', async (event) => {
-        console.error('[Vapi]', event.message)
-        setIsConnecting(false)
-        if (connectingTimeoutRef.current) {
-          clearTimeout(connectingTimeoutRef.current)
-          connectingTimeoutRef.current = null
-        }
-        setIsThinking(false)
-        soundsRef.current.stopThinking()
-        if (conversationId) {
-          await addMessage(conversationId, 'assistant', `Error: ${event.message}`)
-          loadMessages()
-        }
-      }),
-    ]
-    return () => subs.forEach((s) => s.remove())
-  }, [conversationId, cancelReconnect, triggerReconnect])
+  const resetScrollAnchoring = useCallback(() => {
+    initialLoadGraceRef.current = true
+    isPinnedToBottomRef.current = true
+  }, [])
 
   const startNewConversation = useCallback(async () => {
-    hasScrolledRef.current = false
+    resetScrollAnchoring()
     const conv = await createConversation()
     setConversationId(conv.id)
     setMessages([])
     setToolCalls(new Map())
     setStreamingText(null)
     setIsThinking(false)
-  }, [])
+    setTerminalError(null)
+  }, [resetScrollAnchoring])
 
   const loadConversation = useCallback(async (id: number) => {
-    hasScrolledRef.current = false
+    resetScrollAnchoring()
     setConversationId(id)
     setMessages(await getMessages(id))
     setToolCalls(new Map())
     setStreamingText(null)
     setIsThinking(false)
-  }, [])
+  }, [resetScrollAnchoring])
 
   // Handle conversation selection from History tab
   useEffect(() => {
@@ -677,6 +361,32 @@ export default function ChatScreen() {
 
   useEffect(() => { loadMessages() }, [loadMessages])
 
+  useEffect(() => {
+    if (conversationId == null) return
+    initialLoadGraceRef.current = true
+    isPinnedToBottomRef.current = true
+    const t = setTimeout(() => { initialLoadGraceRef.current = false }, 600)
+    return () => clearTimeout(t)
+  }, [conversationId])
+
+  const handleListScroll = useCallback((e: NativeSyntheticEvent<NativeScrollEvent>) => {
+    const { contentOffset, layoutMeasurement, contentSize } = e.nativeEvent
+    const distanceFromBottom = contentSize.height - contentOffset.y - layoutMeasurement.height
+    const pinned = distanceFromBottom <= 80
+    isPinnedToBottomRef.current = pinned
+    if (!pinned) initialLoadGraceRef.current = false
+  }, [])
+
+  const handleContentSizeChange = useCallback(() => {
+    if (initialLoadGraceRef.current) {
+      flatListRef.current?.scrollToEnd({ animated: false })
+      return
+    }
+    if (isPinnedToBottomRef.current) {
+      flatListRef.current?.scrollToEnd({ animated: true })
+    }
+  }, [])
+
   const sendMessage = useCallback(async () => {
     if (!inputText.trim() || !conversationId) return
     const userInput = inputText.trim()
@@ -685,10 +395,10 @@ export default function ChatScreen() {
     await addMessage(conversationId, 'user', userInput)
     await loadMessages()
 
-    const serverUrl = (await getSetting('realtime_server_url')) || 'ws://localhost:8080/ws'
+    const serverUrl = (await getSetting('realtime_server_url')) || DEFAULT_REALTIME_SERVER_URL
     const apiKey = await getSetting('realtime_api_key')
     if (!apiKey) {
-      await addMessage(conversationId, 'assistant', 'Configure Brain Gateway URL in Settings to start chatting.')
+      await addMessage(conversationId, 'assistant', 'Configure your VoiceClaw Desktop URL in Settings to start chatting.')
       await loadMessages()
       return
     }
@@ -738,32 +448,17 @@ export default function ChatScreen() {
     })
   }, [inputText, conversationId, loadMessages])
 
-  const connectingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-
-  useEffect(() => {
-    return () => {
-      if (connectingTimeoutRef.current) {
-        clearTimeout(connectingTimeoutRef.current)
-        connectingTimeoutRef.current = null
-      }
-    }
-  }, [])
-
   const toggleCall = useCallback(async () => {
     if (isCallActive) {
-      userInitiatedEndRef.current = true
       cancelReconnect()
-      if (activeVoiceModeRef.current === 'realtime') {
-        stopRealtimeCall()
-      } else if (activeVoiceModeRef.current === 'custom') {
-        stopCustomPipeline()
-      } else {
-        await ExpoVapiModule.stopCall()
-      }
+      stopRealtimeCall()
       return
     }
+    if (isConnecting) return
 
-    // Disable the button immediately to prevent double-tap
+    setTerminalError(null)
+    pairNeededShownRef.current = false
+    connectionErrorShownRef.current = false
     setIsConnecting(true)
     let callStarted = false
 
@@ -773,7 +468,6 @@ export default function ChatScreen() {
         return
       }
 
-      activeVoiceModeRef.current = 'realtime'
       callStarted = await startRealtimeCall()
     } catch (e: any) {
       const errorMsg = e?.message || String(e)
@@ -785,29 +479,16 @@ export default function ChatScreen() {
     } finally {
       if (!callStarted) {
         setIsConnecting(false)
-        if (connectingTimeoutRef.current) {
-          clearTimeout(connectingTimeoutRef.current)
-          connectingTimeoutRef.current = null
-        }
       }
     }
-  }, [isCallActive, conversationId, loadMessages])
-
-  const stopCustomPipeline = useCallback(() => {
-    pipeline.stop()
-    activeProvidersRef.current = null
-    setIsCallActive(false)
-    setIsMuted(false)
-    setIsThinking(false)
-    setPipelineDebugPhase('idle')
-    soundsRef.current.stopThinking()
-    soundsRef.current.playEnd()
-  }, [pipeline, setPipelineDebugPhase])
+  }, [isCallActive, isConnecting, conversationId, loadMessages])
 
   const startRealtimeCall = useCallback(async (): Promise<boolean> => {
     if (!conversationId) return false
+    pairNeededShownRef.current = false
+    connectionErrorShownRef.current = false
 
-    const serverUrl = (await getSetting('realtime_server_url')) || 'ws://localhost:8080/ws'
+    const serverUrl = (await getSetting('realtime_server_url')) || DEFAULT_REALTIME_SERVER_URL
     const model = normalizeRealtimeModel(await getSetting('realtime_model'))
     const voice = normalizeRealtimeVoice(model, await getSetting('realtime_voice'))
     const apiKey = await getSetting('realtime_api_key')
@@ -826,7 +507,7 @@ export default function ChatScreen() {
     const isDebug = debugPref === 'true'
 
     if (!apiKey) {
-      await addMessage(conversationId, 'assistant', 'Please configure your API key in Brain Gateway settings first.')
+      await addMessage(conversationId, 'assistant', 'Please configure your API key in VoiceClaw Desktop settings first.')
       await loadMessages()
       return false
     }
@@ -842,19 +523,24 @@ export default function ChatScreen() {
 
     const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone
     const locale = Intl.DateTimeFormat().resolvedOptions().locale
+    const deviceName = (await getSetting('device_name')) || undefined
 
     const allMessages = await getMessages(conversationId)
-    // Send the full message history — the relay splits it into recent
-    // verbatim turns + a summary of older messages. Cap at 200 messages
-    // (~100 turns) so a runaway conversation can't inflate the session.config
-    // payload past a reasonable wire-size budget.
+    // Cap at 200 messages so a runaway conversation can't inflate the
+    // session.config payload past a reasonable wire-size budget — the relay
+    // splits this into recent verbatim turns plus a summary of older ones.
     const recentMessages = allMessages
       .filter((m) => m.role === 'user' || m.role === 'assistant')
       .slice(-200)
       .map((m) => ({ role: m.role as 'user' | 'assistant', text: m.content }))
 
-    console.log('[Realtime] Starting session with', { serverUrl, voice, model, historyMessages: recentMessages.length, echoGateEnabled, echoGateThreshold })
-    realtime.start({
+    const directPref = await getSetting('direct_provider_mode')
+    const directProviderModeEnabled = directPref === 'true'
+    // Direct mode only applies to Gemini today — OpenAI and Grok stay on the
+    // relay-proxy path until the relay learns to mint tokens for them too.
+    const useDirect = directProviderModeEnabled && isGemini
+
+    const startConfig: RealtimeConfig = {
       serverUrl,
       voice,
       model,
@@ -872,42 +558,64 @@ export default function ChatScreen() {
       instructionsOverride: systemPrompt || undefined,
       conversationHistory: recentMessages.length > 0 ? recentMessages : undefined,
       tracingEnabled,
-    })
+      deviceName,
+    }
+    lastConfigRef.current = startConfig
+    console.log('[Realtime] Starting session with', { serverUrl, voice, model, historyMessages: recentMessages.length, echoGateEnabled, echoGateThreshold, mode: useDirect ? 'direct' : 'relay' })
+
+    if (useDirect) {
+      activeModeRef.current = 'direct'
+      directGemini.start(startConfig)
+    } else {
+      activeModeRef.current = 'relay'
+      realtime.start(startConfig)
+    }
 
     return true
-  }, [conversationId, loadMessages, realtime])
+  }, [conversationId, loadMessages, realtime, directGemini])
   startRealtimeCallRef.current = startRealtimeCall
+
+  // If direct-mode setup fails (token mint / Gemini WS / session.prep), reuse
+  // the last config to bring the call up via the relay-proxy path so the user
+  // doesn't end up stranded mid-tap. Mirrors the auto-reconnect contract: we
+  // silently rotate the transport, the UI just sees a connecting → connected.
+  fallbackToRelayRef.current = (reason: string) => {
+    const config = lastConfigRef.current
+    if (!config) {
+      console.warn('[Chat] fallback requested but no last config; reason:', reason)
+      setIsConnecting(false)
+      return
+    }
+    activeModeRef.current = 'relay'
+    setIsConnecting(true)
+    realtime.start(config)
+  }
 
   const stopRealtimeCall = useCallback(() => {
     cancelReconnect()
-    realtime.stop()
+    if (activeModeRef.current === 'direct') directGemini.stop()
+    else realtime.stop()
     activeProvidersRef.current = null
     setIsCallActive(false)
     setIsMuted(false)
     setIsThinking(false)
     setIsUserSpeaking(false)
+    setToolCalls(settleInProgressToolCalls)
     soundsRef.current.playEnd()
-  }, [realtime, cancelReconnect])
+  }, [realtime, directGemini, cancelReconnect])
 
-  const handlePipelineInterrupt = useCallback(() => {
-    setPipelineDebugState((current) => ({
-      ...current,
-      phase: 'listening',
-      interruptCount: current.interruptCount + 1,
-    }))
-    pipeline.interrupt()
-  }, [pipeline])
+  useEffect(() => {
+    if (reconnectState.status === 'failed') {
+      setToolCalls(settleInProgressToolCalls)
+    }
+  }, [reconnectState.status])
 
   const toggleMute = useCallback(async () => {
     const newMuted = !isMuted
-    const voiceMode = activeVoiceModeRef.current
-    if (voiceMode === 'realtime') {
-      realtime.setMuted(newMuted)
-    } else {
-      await ExpoVapiModule.setMuted(newMuted)
-    }
+    if (activeModeRef.current === 'direct') directGemini.setMuted(newMuted)
+    else realtime.setMuted(newMuted)
     setIsMuted(newMuted)
-  }, [isMuted, realtime])
+  }, [isMuted, realtime, directGemini])
 
   let baseMessages = messages as Message[]
   if (streamingText !== null) {
@@ -919,8 +627,6 @@ export default function ChatScreen() {
   }
 
   const displayItems = buildDisplayItems(baseMessages, toolCalls)
-
-  const { partials } = transcriptBuffer
 
   return (
     <KeyboardAvoidingView
@@ -957,11 +663,13 @@ export default function ChatScreen() {
           )
         }}
         contentContainerStyle={{ paddingTop: 16, paddingBottom: 8 }}
-        onContentSizeChange={() => {
-          const animated = hasScrolledRef.current
-          hasScrolledRef.current = true
-          flatListRef.current?.scrollToEnd({ animated })
-        }}
+        onContentSizeChange={handleContentSizeChange}
+        onScroll={handleListScroll}
+        scrollEventThrottle={64}
+        initialNumToRender={20}
+        maxToRenderPerBatch={20}
+        windowSize={11}
+        removeClippedSubviews={Platform.OS === 'android'}
         ListEmptyComponent={
           <View testID="empty-chat-placeholder" className="flex-1 items-center justify-center pt-40">
             <View className="mb-5 size-16 items-center justify-center rounded-md border border-border bg-card">
@@ -972,15 +680,6 @@ export default function ChatScreen() {
               Type a message or tap the mic to speak with your agent.
             </Text>
           </View>
-        }
-        ListFooterComponent={
-          partials.length > 0 ? (
-            <View>
-              {partials.map((p) => (
-                <PartialBubble key={p.role} role={p.role} text={p.text} />
-              ))}
-            </View>
-          ) : null
         }
       />
 
@@ -1015,17 +714,23 @@ export default function ChatScreen() {
         </View>
       )}
 
+      {terminalError && !isCallActive && !isConnecting && reconnectState.status !== 'reconnecting' && reconnectState.status !== 'failed' && (
+        <View testID="terminal-error-banner" className="items-center gap-2 border-t border-border bg-muted/50 px-4 py-3">
+          <Text className="text-center text-sm font-medium text-destructive">
+            {terminalError === 'pair' ? 'Not paired with desktop' : 'Couldn\'t reach the desktop'}
+          </Text>
+          <Button testID="try-again-button" variant="secondary" size="sm" onPress={toggleCall}>
+            <Icon as={RefreshCwIcon} size={16} className="text-foreground" />
+            <Text className="ml-1 text-sm text-foreground">Try again</Text>
+          </Button>
+        </View>
+      )}
+
       {isCallActive && (
         <View testID="call-controls" className="flex-row items-center justify-center gap-4 border-t border-border bg-muted/50 px-4 py-3">
-          {activeVoiceModeRef.current === 'custom' ? (
-            <Button testID="interrupt-button" variant="secondary" size="icon" className="rounded-full" onPress={handlePipelineInterrupt}>
-              <Icon as={MicIcon} size={20} className="text-foreground" />
-            </Button>
-          ) : (
-            <Button testID="mute-button" variant={isMuted ? 'destructive' : 'secondary'} size="icon" className="rounded-full" onPress={toggleMute}>
-              <Icon as={isMuted ? MicOffIcon : MicIcon} size={20} className="text-foreground" />
-            </Button>
-          )}
+          <Button testID="mute-button" variant={isMuted ? 'destructive' : 'secondary'} size="icon" className="rounded-full" onPress={toggleMute}>
+            <Icon as={isMuted ? MicOffIcon : MicIcon} size={20} className="text-foreground" />
+          </Button>
           <Button testID="end-call-button" variant="destructive" className="rounded-full px-6" onPress={toggleCall}>
             <Icon as={PhoneOffIcon} size={20} className="text-destructive-foreground" />
             <Text className="ml-2 text-destructive-foreground">End Call</Text>
@@ -1033,70 +738,7 @@ export default function ChatScreen() {
         </View>
       )}
 
-      {debugMode && isCallActive && activeVoiceModeRef.current === 'custom' && (
-        <View testID="pipeline-debug-panel" className="gap-2 border-t border-dashed border-border bg-background px-4 py-3">
-          <Text testID="pipeline-debug-phase" className="text-xs text-muted-foreground">
-            phase:{pipelineDebugState.phase}
-          </Text>
-          <View className="flex-row flex-wrap gap-3">
-            <Text testID="pipeline-debug-transcript-count" className="text-xs text-muted-foreground">
-              transcripts:{pipelineDebugState.transcriptCount}
-            </Text>
-            <Text testID="pipeline-debug-llm-token-count" className="text-xs text-muted-foreground">
-              llmTokens:{pipelineDebugState.llmTokenCount}
-            </Text>
-            <Text testID="pipeline-debug-llm-complete-count" className="text-xs text-muted-foreground">
-              llmDone:{pipelineDebugState.llmCompleteCount}
-            </Text>
-            <Text testID="pipeline-debug-assistant-count" className="text-xs text-muted-foreground">
-              responses:{pipelineDebugState.assistantResponseCount}
-            </Text>
-            <Text testID="pipeline-debug-speak-count" className="text-xs text-muted-foreground">
-              speak:{pipelineDebugState.speakRequestCount}
-            </Text>
-            <Text testID="pipeline-debug-tts-count" className="text-xs text-muted-foreground">
-              tts:{pipelineDebugState.ttsStartCount}
-            </Text>
-            <Text testID="pipeline-debug-error-count" className="text-xs text-muted-foreground">
-              errors:{pipelineDebugState.errorCount}
-            </Text>
-            <Text testID="pipeline-debug-interrupt-count" className="text-xs text-muted-foreground">
-              interrupts:{pipelineDebugState.interruptCount}
-            </Text>
-          </View>
-          <Text testID="pipeline-debug-tts-provider" className="text-xs text-muted-foreground" numberOfLines={1}>
-            ttsProvider:{pipelineDebugState.ttsProvider}
-          </Text>
-          <Text testID="pipeline-debug-last-user" className="text-xs text-muted-foreground" numberOfLines={2}>
-            user:{pipelineDebugState.lastUserTranscript}
-          </Text>
-          <Text testID="pipeline-debug-last-llm" className="text-xs text-muted-foreground" numberOfLines={3}>
-            llm:{pipelineDebugState.lastLLMText}
-          </Text>
-          <Text testID="pipeline-debug-last-assistant" className="text-xs text-muted-foreground" numberOfLines={3}>
-            assistant:{pipelineDebugState.lastAssistantResponse}
-          </Text>
-          <Text testID="pipeline-debug-last-speak" className="text-xs text-muted-foreground" numberOfLines={3}>
-            speak:{pipelineDebugState.lastSpeakRequest}
-          </Text>
-          <Text testID="pipeline-debug-last-error" className="text-xs text-muted-foreground" numberOfLines={3}>
-            error:{pipelineDebugState.lastError}
-          </Text>
-          <View className="flex-row flex-wrap gap-2">
-            <Button testID="simulate-short-transcript-button" variant="secondary" size="sm" onPress={() => simulatePipelineTranscript('Say hello in one short sentence.')}>
-              <Text className="text-xs text-foreground">Short Turn</Text>
-            </Button>
-            <Button testID="simulate-long-transcript-button" variant="secondary" size="sm" onPress={() => simulatePipelineTranscript('Tell me a long story about a dragon. Make it at least 5 sentences.')}>
-              <Text className="text-xs text-foreground">Long Turn</Text>
-            </Button>
-            <Button testID="simulate-interrupt-transcript-button" variant="secondary" size="sm" onPress={() => simulatePipelineTranscript('Actually stop the dragon story and reply with exactly: redirect successful.')}>
-              <Text className="text-xs text-foreground">Redirect Turn</Text>
-            </Button>
-          </View>
-        </View>
-      )}
-
-      {debugMode && isCallActive && activeVoiceModeRef.current === 'realtime' && rmsMetrics && (
+      {debugMode && isCallActive && rmsMetrics && (
         <View testID="rms-debug-panel" className="gap-2 border-t border-dashed border-border bg-background px-4 py-3">
           <Text className="text-xs font-semibold text-muted-foreground">Audio Debug</Text>
           <View className="flex-row items-center gap-2">
@@ -1144,8 +786,8 @@ export default function ChatScreen() {
       <View testID="input-bar" className="flex-row items-center gap-2 border-t border-border bg-card/80 px-4 py-3">
         {!isCallActive && (
           <Button
-            testID="call-button"
-            variant={isConnecting ? 'default' : 'secondary'}
+            testID={terminalError ? 'retry-call-button' : 'call-button'}
+            variant={isConnecting ? 'default' : terminalError ? 'destructive' : 'secondary'}
             size="icon"
             className="rounded-full"
             onPress={toggleCall}
@@ -1153,7 +795,9 @@ export default function ChatScreen() {
           >
             {isConnecting
               ? <ActivityIndicator size="small" color={colorScheme === 'dark' ? palette.paper : '#FFFAF2'} />
-              : <Icon as={MicIcon} size={20} className="text-foreground" />}
+              : terminalError
+                ? <Icon as={RefreshCwIcon} size={20} className="text-destructive-foreground" />
+                : <Icon as={MicIcon} size={20} className="text-foreground" />}
           </Button>
         )}
         <Input
@@ -1175,6 +819,22 @@ export default function ChatScreen() {
 
 // --- Helper Components ---
 
+function settleInProgressToolCalls(prev: Map<string, ToolCallItem>): Map<string, ToolCallItem> {
+  let changed = false
+  const next = new Map(prev)
+  const now = Date.now()
+  for (const [callId, item] of prev) {
+    if (item.status !== 'in-progress') continue
+    next.set(callId, {
+      ...item,
+      status: 'stopped',
+      durationMs: now - item.startedAt,
+    })
+    changed = true
+  }
+  return changed ? next : prev
+}
+
 function buildDisplayItems(messages: Message[], toolCalls: Map<string, ToolCallItem>): DisplayItem[] {
   const items: DisplayItem[] = messages.map((m) => ({ kind: 'message' as const, message: m }))
   for (const tc of toolCalls.values()) {
@@ -1186,23 +846,6 @@ function buildDisplayItems(messages: Message[], toolCalls: Map<string, ToolCallI
     return aTime - bTime
   })
   return items
-}
-
-function PartialBubble({ role, text }: { role: 'user' | 'assistant', text: string }) {
-  const isUser = role === 'user'
-  return (
-    <View className={`mb-3 px-4 ${isUser ? 'items-end' : 'items-start'}`}>
-      <View
-        className={`max-w-[80%] rounded-md px-4 py-3 ${
-          isUser ? 'bg-primary/70' : 'border border-border bg-card'
-        }`}>
-        <Text
-          className={`text-sm italic ${isUser ? 'text-primary-foreground/70' : 'text-muted-foreground'}`}>
-          {text}
-        </Text>
-      </View>
-    </View>
-  )
 }
 
 function ThinkingDots() {

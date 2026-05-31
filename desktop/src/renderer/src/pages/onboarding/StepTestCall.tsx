@@ -16,6 +16,8 @@ type Props = {
   onStartOver?: () => void
   providerId?: ProviderId
   previewMode?: boolean
+  stepNumber?: number
+  totalSteps?: number
 }
 
 const SMOKE_PROMPT = "Say 'Hi, I'm VoiceClaw' in five words."
@@ -35,6 +37,8 @@ export function StepTestCall({
   onStartOver,
   providerId = 'gemini',
   previewMode = false,
+  stepNumber = 6,
+  totalSteps = 6,
 }: Props) {
   const [state, setState] = useState<TestState>(
     previewMode
@@ -55,9 +59,9 @@ export function StepTestCall({
 
   return (
     <StepFrame
-      stepIndex={6}
-      totalSteps={6}
-      eyebrow="06 / First call"
+      stepIndex={stepNumber}
+      totalSteps={totalSteps}
+      eyebrow={`${String(stepNumber).padStart(2, '0')} / First call`}
       title="Say hi."
       description="One last check — we'll ping your provider with a tiny prompt to make sure the key is alive. Real bidirectional voice ships in the next build; this is just the smoke test."
       primaryAction={{

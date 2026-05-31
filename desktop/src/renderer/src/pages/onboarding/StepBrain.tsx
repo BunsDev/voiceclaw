@@ -28,6 +28,8 @@ type Props = {
   initialBrain?: BrainId
   initialCustomUrl?: string
   previewMode?: boolean
+  stepNumber?: number
+  totalSteps?: number
 }
 
 export function StepBrain({
@@ -37,6 +39,8 @@ export function StepBrain({
   initialBrain = 'openclaw',
   initialCustomUrl = '',
   previewMode = false,
+  stepNumber = 5,
+  totalSteps = 6,
 }: Props) {
   const [selected, setSelected] = useState<BrainId>(initialBrain)
   const [customUrl, setCustomUrl] = useState(initialCustomUrl)
@@ -88,9 +92,9 @@ export function StepBrain({
 
   return (
     <StepFrame
-      stepIndex={5}
-      totalSteps={6}
-      eyebrow="05 / Brain"
+      stepIndex={stepNumber}
+      totalSteps={totalSteps}
+      eyebrow={`${String(stepNumber).padStart(2, '0')} / Brain`}
       title="Who's actually doing the thinking?"
       description="The voice you picked last step handles conversation. The brain does the work — answering questions, running tools, remembering context. Pick one. You can switch later."
       primaryAction={{ label: 'Continue', onClick: handleContinue, disabled: !canContinue }}

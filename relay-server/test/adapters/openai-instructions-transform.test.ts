@@ -1,25 +1,30 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { tmpdir } from "node:os"
 import type { buildInstructions as BuildInstructionsFn } from "../../src/instructions.js"
 
-let fixtureDir: string
+let fixtureRoot: string
+let workspaceDir: string
+let prevWorkspaceEnv: string | undefined
 let buildInstructions: typeof BuildInstructionsFn
 
 describe("buildInstructions", () => {
   beforeAll(async () => {
-    fixtureDir = mkdtempSync(join(tmpdir(), "voiceclaw-brain-"))
-    process.env.BRAIN_WORKSPACE = fixtureDir
+    fixtureRoot = mkdtempSync(join(tmpdir(), "voiceclaw-instr-"))
+    workspaceDir = join(fixtureRoot, "workspace")
+    mkdirSync(workspaceDir, { recursive: true })
+    prevWorkspaceEnv = process.env.VOICECLAW_WORKSPACE
+    process.env.VOICECLAW_WORKSPACE = workspaceDir
 
-    writeFileSync(join(fixtureDir, "IDENTITY.md"), `# IDENTITY.md - Who Am I?
+    writeFileSync(join(workspaceDir, "IDENTITY.md"), `# IDENTITY.md - Who Am I?
 
 - **Name:** Kira
 - **Creature:** Michael's private voice companion
 - **Vibe:** Calm, emotionally intelligent, precise, and quietly formidable. Warm but never gushy.
 `)
 
-    writeFileSync(join(fixtureDir, "SOUL.md"), `# SOUL.md - Who You Are
+    writeFileSync(join(workspaceDir, "SOUL.md"), `# SOUL.md - Who You Are
 
 Want a sharper version? See [SOUL.md Personality Guide](/concepts/soul).
 
@@ -51,7 +56,9 @@ These files are your memory.
   })
 
   afterAll(() => {
-    rmSync(fixtureDir, { recursive: true, force: true })
+    if (prevWorkspaceEnv === undefined) delete process.env.VOICECLAW_WORKSPACE
+    else process.env.VOICECLAW_WORKSPACE = prevWorkspaceEnv
+    rmSync(fixtureRoot, { recursive: true, force: true })
   })
 
   it("OpenAI: voice-style transform strips markdown structure and rewrites identity", () => {
@@ -62,7 +69,7 @@ These files are your memory.
       brainAgent: "enabled",
       apiKey: "test-key",
     })
-    const identityBlock = instructions.split("\n\n## Your Brain")[0]
+    const identityBlock = instructions.split("\n\n## Your direct tools")[0]
 
     expect(identityBlock).toMatch(/## Personality & Tone/)
     expect(identityBlock).toMatch(/You are Kira, Michael's private voice companion, speaking live in a voice conversation\./)

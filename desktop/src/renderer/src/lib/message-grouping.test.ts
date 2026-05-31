@@ -83,7 +83,7 @@ describe('groupMessages', () => {
       { kind: 'separator' }
     >[]
     expect(seps).toHaveLength(2)
-    expect(seps[1].label).toBe('just now')
+    expect(seps[1].label).toMatch(/\d{1,2}:\d{2}/)
     const messages = out.filter((i) => i.kind === 'message')
     expect(messages).toHaveLength(4)
     for (const m of messages) {

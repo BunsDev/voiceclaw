@@ -33,6 +33,14 @@ export function getAllocatedPorts(): Partial<Record<ServiceName, number>> {
   return { ...allocated }
 }
 
+// Record a port for a service without binding. Used when the desktop
+// defers to an external process already serving that port (e.g. a
+// developer running `yarn dev:server` for the relay), so the renderer's
+// port lookup still finds the right endpoint.
+export function markAllocatedPort(service: ServiceName, port: number): void {
+  allocated[service] = port
+}
+
 // For tests / force-reset scenarios.
 export function resetAllocatedPorts(): void {
   for (const key of Object.keys(allocated) as ServiceName[]) {

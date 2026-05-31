@@ -62,6 +62,32 @@ type PickImageResult =
   | { ok: false; cancelled: true }
   | { ok: false; error: string }
 
+type DevicePairPayload = {
+  v: 1
+  url: string
+  token: string
+  label: string
+}
+
+type DeviceCreateResult =
+  | {
+      ok: true
+      id: string
+      label: string
+      payload: DevicePairPayload
+      plaintext: string
+      hasNetwork: boolean
+    }
+  | { ok: false; error: string }
+
+type DeviceListRow = {
+  id: string
+  label: string
+  createdAt: number
+  lastUsedAt: number | null
+  revoked: boolean
+}
+
 const electronAPI = {
   platform: process.platform,
   app: {
@@ -410,6 +436,23 @@ const electronAPI = {
   },
   shell: {
     openExternal: (url: string) => ipcRenderer.invoke('shell:openExternal', url) as Promise<void>,
+  },
+  devices: {
+    create: (label: string) =>
+      ipcRenderer.invoke('devices:create', { label }) as Promise<DeviceCreateResult>,
+    list: () => ipcRenderer.invoke('devices:list') as Promise<DeviceListRow[]>,
+    revoke: (id: string) =>
+      ipcRenderer.invoke('devices:revoke', { id }) as Promise<
+        { ok: true } | { ok: false; error: string }
+      >,
+    rename: (id: string, label: string) =>
+      ipcRenderer.invoke('devices:rename', { id, label }) as Promise<
+        { ok: true } | { ok: false; error: string }
+      >,
+    remove: (id: string) =>
+      ipcRenderer.invoke('devices:remove', { id }) as Promise<
+        { ok: true } | { ok: false; error: string }
+      >,
   },
   shortcuts: {
     list: () =>

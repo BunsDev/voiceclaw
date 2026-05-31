@@ -43,6 +43,8 @@ type Props = {
   onSkip?: () => void
   onStartOver?: () => void
   previewMode?: boolean
+  stepNumber?: number
+  totalSteps?: number
 }
 
 type StatusMap = Record<PermissionId, PermissionStatus | 'granted' | 'denied' | 'unknown'>
@@ -58,6 +60,8 @@ export function StepPermissions({
   onSkip,
   onStartOver,
   previewMode = false,
+  stepNumber = 3,
+  totalSteps = 6,
 }: Props) {
   const [statuses, setStatuses] = useState<StatusMap>(
     previewMode
@@ -112,9 +116,9 @@ export function StepPermissions({
 
   return (
     <StepFrame
-      stepIndex={3}
-      totalSteps={6}
-      eyebrow="03 / Permissions"
+      stepIndex={stepNumber}
+      totalSteps={totalSteps}
+      eyebrow={`${String(stepNumber).padStart(2, '0')} / Permissions`}
       title="A few things the Mac needs from you."
       description="macOS asks once per permission. If you click the wrong thing, we'll send you to the right pane in System Settings — no terminal gymnastics."
       primaryAction={{

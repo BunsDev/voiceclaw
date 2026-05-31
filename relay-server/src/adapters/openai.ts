@@ -77,6 +77,13 @@ export class OpenAIAdapter implements ProviderAdapter {
   private resumeRecentTurns: HistoryMessage[] = []
   private resumeSummary: string | null = null
   private resumeContextInjected = false
+  // OpenAI Realtime defaults to server_vad with start-of-speech interrupting
+  // the active response. Speaker output bleeds back through the client mic,
+  // gets transcribed, and the model interrupts ITSELF. While the assistant is
+  // emitting audio we drop mic frames upstream; the gate releases the instant
+  // the audio output ends so the next turn's barge-in still lands cleanly.
+  private assistantSpeaking = false
+  private droppedMicFramesWhileSpeaking = 0
 
   constructor(options: OpenAICompatibleAdapterOptions = {}) {
     this.providerName = options.providerName ?? "openai"
@@ -92,6 +99,11 @@ export class OpenAIAdapter implements ProviderAdapter {
     this.sendToClient = sendToClient
     this.config = config
     this.watchdogEnabled = config.watchdog === "enabled"
+    // Reset the mic-gate on every connect. A prior connection that dropped
+    // mid-turn while assistantSpeaking was true would otherwise carry the
+    // flag into the new session and permanently gate the mic to zero frames.
+    this.assistantSpeaking = false
+    this.droppedMicFramesWhileSpeaking = 0
 
     const split = await buildHistorySplit(config.conversationHistory, "openai")
     this.resumeRecentTurns = split.recent
@@ -107,6 +119,13 @@ export class OpenAIAdapter implements ProviderAdapter {
   }
 
   sendAudio(data: string) {
+    if (this.assistantSpeaking) {
+      this.droppedMicFramesWhileSpeaking++
+      if (this.droppedMicFramesWhileSpeaking % 100 === 1) {
+        log(`[${this.providerName}] mic gated while assistant speaking (dropped=${this.droppedMicFramesWhileSpeaking})`)
+      }
+      return
+    }
     this.sendUpstream({
       type: "input_audio_buffer.append",
       audio: data,
@@ -157,6 +176,7 @@ export class OpenAIAdapter implements ProviderAdapter {
 
   cancelResponse() {
     this.pendingResponseCreate = false
+    this.releaseMicGate()
     if (this.isResponseActive && !this.pendingResponseCancel) {
       this.pendingResponseCancel = true
       this.turnWasInterrupted = true
@@ -207,6 +227,10 @@ export class OpenAIAdapter implements ProviderAdapter {
   disconnect() {
     this.isClosing = true
     this.clearTimers()
+    // Drop the mic-gate so a subsequent connect on the same adapter instance
+    // never inherits a stuck "speaking" flag.
+    this.assistantSpeaking = false
+    this.droppedMicFramesWhileSpeaking = 0
     if (this.upstream && this.upstream.readyState !== WebSocket.CLOSED) {
       this.upstream.close(1000, "client disconnected")
     }
@@ -467,6 +491,10 @@ export class OpenAIAdapter implements ProviderAdapter {
         if (this.firstAudioDeltaAtMs == null) {
           this.firstAudioDeltaAtMs = Date.now()
         }
+        if (!this.assistantSpeaking) {
+          this.assistantSpeaking = true
+          this.droppedMicFramesWhileSpeaking = 0
+        }
         this.sendToClient?.({ type: "audio.delta", data: event.delta })
         this.resetWatchdog()
         break
@@ -559,6 +587,7 @@ export class OpenAIAdapter implements ProviderAdapter {
       case "response.done": {
         this.isResponseActive = false
         this.pendingResponseCancel = false
+        this.releaseMicGate()
         // Emit latency metrics BEFORE turn.ended so the tracer's active
         // generation is still the correct target (turn.ended flips the active
         // turn to the pendingEnd bucket, but attachLatency handles both).
@@ -584,6 +613,7 @@ export class OpenAIAdapter implements ProviderAdapter {
         const errorMessage: string = event.error?.message ?? "upstream error"
         logError(`[${this.providerName}] Error: ${errorMessage}`)
         this.resetResponseState()
+        this.releaseMicGate()
         const parsedStatus = parseStatusFromMessage(errorMessage)
         const mapped = mapAdapterError(this.providerName, parsedStatus, errorMessage)
         this.sendToClient?.({
@@ -598,6 +628,25 @@ export class OpenAIAdapter implements ProviderAdapter {
         break
       }
 
+      // Audio output complete. xAI's beta dialect does not reliably emit
+      // response.done after a placeholder tool result (e.g. `{"status":
+      // "running"}`) is returned and the real result is later injected via
+      // conversation.item.create — the deferred response.create then strands
+      // and the model never speaks the real result. Use audio output
+      // completion as a backup flush signal so the injected tool result
+      // actually triggers the model to continue. OpenAI GA emits response.done
+      // reliably; the backup is gated on the xAI dialect to avoid racing the
+      // canonical lifecycle for OpenAI.
+      case "response.audio.done":
+      case "response.output_audio.done":
+        this.releaseMicGate()
+        if (this.sessionFormat === "xai") {
+          this.isResponseActive = false
+          this.pendingResponseCancel = false
+          this.flushPendingResponseCreate()
+        }
+        break
+
       // Rate limits (log only)
       case "rate_limits.updated":
         break
@@ -609,8 +658,6 @@ export class OpenAIAdapter implements ProviderAdapter {
             event.type !== "input_audio_buffer.committed" &&
             event.type !== "input_audio_buffer.cleared" &&
             event.type !== "conversation.item.created" &&
-            event.type !== "response.audio.done" &&
-            event.type !== "response.output_audio.done" &&
             event.type !== "response.function_call_arguments.delta") {
           log(`[${this.providerName}] Unhandled event: ${event.type}`)
         }
@@ -674,6 +721,16 @@ export class OpenAIAdapter implements ProviderAdapter {
     this.isResponseActive = false
     this.pendingResponseCancel = false
     this.pendingResponseCreate = false
+    this.releaseMicGate()
+  }
+
+  private releaseMicGate() {
+    if (!this.assistantSpeaking) return
+    if (this.droppedMicFramesWhileSpeaking > 0) {
+      log(`[${this.providerName}] mic re-opened (dropped ${this.droppedMicFramesWhileSpeaking} echo-window frames)`)
+    }
+    this.assistantSpeaking = false
+    this.droppedMicFramesWhileSpeaking = 0
   }
 
   private resetLatencyMarks() {

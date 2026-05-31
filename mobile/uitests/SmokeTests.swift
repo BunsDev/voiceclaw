@@ -61,12 +61,12 @@ final class SmokeTests: VoiceClawUITests {
     takeScreenshot(name: "settings-cards")
   }
 
-  func testVapiCallStartsAndEnds() throws {
+  func testRealtimeCallStartsAndEnds() throws {
     tap(testID: "call-button")
     assertExists(testID: "call-controls", timeout: 30)
     assertExists(testID: "mute-button", timeout: 30)
     assertExists(testID: "end-call-button", timeout: 30)
-    takeScreenshot(name: "vapi-call-active")
+    takeScreenshot(name: "realtime-call-active")
 
     tap(testID: "end-call-button")
     assertExists(testID: "call-button", timeout: 20)

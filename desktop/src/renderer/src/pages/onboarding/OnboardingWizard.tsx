@@ -17,7 +17,12 @@ import {
 
 export type { WizardStepId }
 
-const STEPS: WizardStepId[] = [
+// When the harness runs the realtime model with direct tools (read/write/edit/
+// bash/web_search), the standalone "brain" picker becomes meaningless — the
+// model IS the brain. Skip the brain step in that mode.
+const EXPERIMENTAL_DIRECT_TOOLS = true
+
+const ALL_STEPS: WizardStepId[] = [
   'welcome',
   'signin',
   'permissions',
@@ -26,6 +31,10 @@ const STEPS: WizardStepId[] = [
   'identity',
   'testcall',
 ]
+
+const STEPS: WizardStepId[] = EXPERIMENTAL_DIRECT_TOOLS
+  ? ALL_STEPS.filter((s) => s !== 'brain')
+  : ALL_STEPS
 
 type Props = {
   initialState?: OnboardingState
@@ -106,9 +115,19 @@ export function OnboardingWizard({ initialState, onComplete, previewMode = false
     setStepId(result.state.currentStep)
   }, [previewMode])
 
+  const stepNumber = currentIndex + 1
+  const totalSteps = STEPS.length
+
   switch (stepId) {
     case 'welcome':
-      return <StepWelcome onContinue={() => next()} onStartOver={startOver} />
+      return (
+        <StepWelcome
+          onContinue={() => next()}
+          onStartOver={startOver}
+          stepNumber={stepNumber}
+          totalSteps={totalSteps}
+        />
+      )
     case 'signin':
       return (
         <StepSignIn
@@ -118,6 +137,8 @@ export function OnboardingWizard({ initialState, onComplete, previewMode = false
           onStartOver={startOver}
           initialSignedIn={payload.signedIn ?? false}
           previewMode={previewMode}
+          stepNumber={stepNumber}
+          totalSteps={totalSteps}
         />
       )
     case 'permissions':
@@ -128,6 +149,8 @@ export function OnboardingWizard({ initialState, onComplete, previewMode = false
           onSkip={() => next()}
           onStartOver={startOver}
           previewMode={previewMode}
+          stepNumber={stepNumber}
+          totalSteps={totalSteps}
         />
       )
     case 'provider':
@@ -138,6 +161,8 @@ export function OnboardingWizard({ initialState, onComplete, previewMode = false
           onStartOver={startOver}
           initialProvider={payload.provider ?? 'gemini'}
           previewMode={previewMode}
+          stepNumber={stepNumber}
+          totalSteps={totalSteps}
         />
       )
     case 'brain':
@@ -149,6 +174,8 @@ export function OnboardingWizard({ initialState, onComplete, previewMode = false
           initialBrain={resolveInitialBrainId(payload.brain)}
           initialCustomUrl={typeof payload.brain === 'object' ? payload.brain.url : ''}
           previewMode={previewMode}
+          stepNumber={stepNumber}
+          totalSteps={totalSteps}
         />
       )
     case 'identity':
@@ -161,6 +188,8 @@ export function OnboardingWizard({ initialState, onComplete, previewMode = false
           onStartOver={startOver}
           initialIdentity={payload.identity ?? {}}
           previewMode={previewMode}
+          stepNumber={stepNumber}
+          totalSteps={totalSteps}
         />
       )
     case 'testcall':
@@ -171,6 +200,8 @@ export function OnboardingWizard({ initialState, onComplete, previewMode = false
           onStartOver={startOver}
           providerId={payload.provider ?? 'gemini'}
           previewMode={previewMode}
+          stepNumber={stepNumber}
+          totalSteps={totalSteps}
         />
       )
   }

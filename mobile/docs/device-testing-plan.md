@@ -10,7 +10,7 @@ Enable Claude Code to autonomously build, deploy, interact with, and verify the 
 
 - **Device:** iPhone 12 Pro, iOS 26.3.1, Developer Mode enabled, DDI mounted
 - **Mac:** Apple M3 Max, macOS 15.3.1, Xcode installed
-- **Project:** Expo SDK 55, React Native 0.83, custom native Turbo Module (Vapi Swift bridge)
+- **Project:** Expo SDK 55, React Native 0.83, realtime WebSocket transport to a self-hosted relay
 - **Available tools:** `idb`, `libimobiledevice` (idevicescreenshot, idevicesyslog, etc.), `xcrun devicectl`, `xcodebuild`
 
 ---
@@ -210,7 +210,7 @@ maestro --driver-host-port 6001 --device DEVICE_UDID --app-file /path/to/app.ipa
 - No screenshot capability
 - Limited to React-layer interactions (cannot test native module behavior)
 - Project appears less actively maintained
-- Cannot test the native Vapi bridge which is the core of VoiceClaw
+- Cannot test the native audio bridge which is the core of VoiceClaw
 
 **Verdict:** Not suitable. VoiceClaw's critical functionality is in the native Swift bridge, which Cavy cannot test.
 
@@ -291,7 +291,7 @@ Once XCUITest is working, add Appium as an optional tool for:
 - Accessibility tree inspection
 
 ### Requires Manual Testing
-- Audio/microphone functionality (Vapi voice calls) -- hardware input cannot be simulated
+- Audio/microphone functionality (realtime voice calls) -- hardware input cannot be simulated
 - Push notification delivery (requires Apple Push Notification service)
 - Background/foreground app lifecycle edge cases
 - Bluetooth/network connectivity changes

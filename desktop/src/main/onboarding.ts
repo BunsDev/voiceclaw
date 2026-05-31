@@ -66,6 +66,17 @@ export function ensureOnboardingSchema(): void {
       platform TEXT,
       created_at INTEGER NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS device_tokens (
+      id TEXT PRIMARY KEY,
+      label TEXT NOT NULL,
+      token_hash TEXT NOT NULL UNIQUE,
+      created_at INTEGER NOT NULL,
+      last_used_at INTEGER,
+      revoked INTEGER NOT NULL DEFAULT 0
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_device_tokens_hash ON device_tokens(token_hash);
   `)
 }
 
@@ -146,6 +157,20 @@ export function getBundledRelayApiKey(): string | null {
     .prepare('SELECT value FROM settings WHERE key = ?')
     .get('realtime_api_key') as { value: string } | undefined
   return row?.value ?? null
+}
+
+export function getTavilyApiKey(): string | null {
+  ensureOnboardingSchema()
+  const db = getDb()
+  const enabledRow = db
+    .prepare('SELECT value FROM settings WHERE key = ?')
+    .get('tavily_enabled') as { value: string } | undefined
+  if (enabledRow?.value === 'false') return null
+  const keyRow = db
+    .prepare('SELECT value FROM settings WHERE key = ?')
+    .get('tavily_api_key') as { value: string } | undefined
+  const key = keyRow?.value
+  return key && key.length > 0 ? key : null
 }
 
 export function resetOnboarding(): OnboardingState {

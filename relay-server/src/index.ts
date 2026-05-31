@@ -5,17 +5,22 @@ import { initLangfuse, shutdownLangfuse } from "./tracing/langfuse.js"
 initLangfuse()
 
 import express from "express"
-import { createServer } from "node:http"
 import { networkInterfaces } from "node:os"
 import { WebSocketServer } from "ws"
 import { RelaySession } from "./session.js"
 import { getTestPageHTML } from "./test-page.js"
-import { log, warn } from "./log.js"
+import { log, warn, error as logError } from "./log.js"
 import { gracefulShutdown } from "./shutdown.js"
+import { createRelayServer } from "./server-factory.js"
+import { getBridgeConfig, getDiscoveryFilePath } from "./device-tokens.js"
 
 const SHUTDOWN_TIMEOUT_MS = 10_000
 
 const PORT = parseInt(process.env.PORT ?? "8080", 10)
+// Default to loopback so a misconfigured relay (no RELAY_API_KEY, no firewall)
+// is not reachable from the LAN/tailnet. The desktop sets RELAY_BIND_HOST
+// explicitly to 0.0.0.0 when the user opted into mobile pairing.
+const HOST = process.env.RELAY_BIND_HOST?.trim() || "127.0.0.1"
 
 const app = express()
 
@@ -33,7 +38,7 @@ app.get("/test", (req, res) => {
   res.type("html").send(getTestPageHTML(host))
 })
 
-const server = createServer(app)
+const { server, tls: tlsActive } = createRelayServer(app)
 
 // 4 MB headroom for screen-share frames — composite + original + strokes-png in
 // a single frame.append message can comfortably exceed the previous 1 MB cap.
@@ -83,21 +88,41 @@ process.on("SIGTERM", () => { void shutdown() })
 process.on("SIGINT", () => { void shutdown() })
 
 if (!process.env.RELAY_API_KEY) {
-  warn("⚠️  RELAY_API_KEY is not set — WebSocket connections will not require authentication")
+  // Production must have a relay key or the WS is wide open: any LAN/tailnet
+  // peer can run mint_token / tool.exec / session.prep. The dev override is
+  // explicit so we never ship "we just forgot to set it".
+  if (process.env.NODE_ENV === "production" && process.env.RELAY_ALLOW_UNAUTHENTICATED !== "true") {
+    logError("RELAY_API_KEY is not set in production — refusing to start (set RELAY_ALLOW_UNAUTHENTICATED=true to bypass for local dev only)")
+    process.exit(1)
+  }
+  warn("⚠️  RELAY_API_KEY is not set — WebSocket connections will not require authentication (dev only)")
 }
 
-server.listen(PORT, () => {
+const httpScheme = tlsActive ? "https" : "http"
+const wsScheme = tlsActive ? "wss" : "ws"
+server.listen(PORT, HOST, () => {
   const lanIP = getLanIP()
-  log(`Relay server listening on http://localhost:${PORT}`)
+  log(`Relay server listening on ${httpScheme}://${HOST}:${PORT}`)
   if (isTestPageEnabled()) {
-    log(`Test page: http://localhost:${PORT}/test`)
+    log(`Test page: ${httpScheme}://localhost:${PORT}/test`)
   }
-  if (lanIP) {
+  if (HOST === "0.0.0.0" && lanIP) {
     log(`Connect from your phone:`)
-    log(`  ws://${lanIP}:${PORT}/ws`)
+    log(`  ${wsScheme}://${lanIP}:${PORT}/ws`)
     if (isTestPageEnabled()) {
-      log(`  Test page: http://${lanIP}:${PORT}/test`)
+      log(`  Test page: ${httpScheme}://${lanIP}:${PORT}/test`)
     }
+  }
+  const bridge = getBridgeConfig()
+  if (bridge) {
+    log(`Device-token bridge: ${bridge.url} (source=${bridge.source})`)
+  } else {
+    const discoveryPath = getDiscoveryFilePath()
+    warn(
+      `Device-token bridge: NOT CONFIGURED — paired mobile clients (vcd_ tokens) will be rejected with 401. ` +
+      `Start the desktop app so it writes the discovery file at ${discoveryPath ?? "<unknown>"}, ` +
+      `or export VOICECLAW_DEVICE_TOKEN_CHECK_URL + VOICECLAW_DEVICE_TOKEN_CHECK_NONCE before starting the relay.`,
+    )
   }
 })
 

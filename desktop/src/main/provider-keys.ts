@@ -119,7 +119,15 @@ export async function geminiSmokeCall(prompt: string): Promise<{ ok: true; text:
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           contents: [{ role: 'user', parts: [{ text: prompt }] }],
-          generationConfig: { temperature: 0.4, maxOutputTokens: 64 },
+          // Gemini 2.5 Flash reasons by default and burns the output budget
+          // on hidden thinking tokens before emitting any visible text. The
+          // smoke test only needs a five-word reply, so disable thinking
+          // outright and keep the budget tight.
+          generationConfig: {
+            temperature: 0.4,
+            maxOutputTokens: 256,
+            thinkingConfig: { thinkingBudget: 0 },
+          },
         }),
       },
     )
@@ -128,10 +136,19 @@ export async function geminiSmokeCall(prompt: string): Promise<{ ok: true; text:
       return { ok: false, error: `Gemini ${response.status}: ${text.slice(0, 200)}` }
     }
     const body = (await response.json()) as {
-      candidates?: { content?: { parts?: { text?: string }[] } }[]
+      candidates?: {
+        content?: { parts?: { text?: string }[] }
+        finishReason?: string
+      }[]
+      promptFeedback?: { blockReason?: string }
     }
-    const text = body.candidates?.[0]?.content?.parts?.map((p) => p.text ?? '').join('').trim()
-    if (!text) return { ok: false, error: 'Empty response from Gemini.' }
+    const candidate = body.candidates?.[0]
+    const text = candidate?.content?.parts?.map((p) => p.text ?? '').join('').trim()
+    if (!text) {
+      const reason =
+        body.promptFeedback?.blockReason ?? candidate?.finishReason ?? 'no text'
+      return { ok: false, error: `Empty response from Gemini (${reason}).` }
+    }
     return { ok: true, text }
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : 'Network error' }

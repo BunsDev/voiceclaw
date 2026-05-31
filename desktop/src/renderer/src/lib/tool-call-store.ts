@@ -10,6 +10,7 @@ export interface ToolCallEntry {
   result?: string
   error?: string
   step?: string
+  streaming?: boolean
 }
 
 export interface ToolCallProgressDelta {
@@ -41,6 +42,7 @@ export function applyToolCallProgress(
     const next: ToolCallEntry = { ...e }
     if (delta.textDelta) {
       next.result = (e.result ?? '') + delta.textDelta
+      next.streaming = true
     }
     if (delta.step !== undefined) {
       next.step = delta.step

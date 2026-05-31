@@ -77,6 +77,27 @@ describe('applyToolCallProgress', () => {
     expect(next[0].result).toBe('kept')
   })
 
+  it('sets streaming=true on first non-empty textDelta', () => {
+    const entries: ToolCallEntry[] = [baseEntry()]
+    expect(entries[0].streaming).toBeUndefined()
+    const next = applyToolCallProgress(entries, 'call-1', { textDelta: 'a' })
+    expect(next[0].streaming).toBe(true)
+  })
+
+  it('does not set streaming for step-only progress events', () => {
+    const entries: ToolCallEntry[] = [baseEntry()]
+    const next = applyToolCallProgress(entries, 'call-1', { step: 'thinking' })
+    expect(next[0].streaming).toBeUndefined()
+    expect(next[0].step).toBe('thinking')
+  })
+
+  it('keeps streaming=true once set, even when later progress carries no textDelta', () => {
+    let entries: ToolCallEntry[] = [baseEntry()]
+    entries = applyToolCallProgress(entries, 'call-1', { textDelta: 'hi' })
+    entries = applyToolCallProgress(entries, 'call-1', { step: 'still thinking' })
+    expect(entries[0].streaming).toBe(true)
+  })
+
   it('preserves other entries', () => {
     const entries: ToolCallEntry[] = [
       baseEntry({ callId: 'call-1', result: 'a' }),

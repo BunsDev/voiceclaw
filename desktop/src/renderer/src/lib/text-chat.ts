@@ -18,6 +18,8 @@ export interface TextChatOptions {
   // before the text.input so they land in the same model turn (the openai
   // adapter injects each as an input_image conversation item).
   images?: TextChatImageInput[]
+  voiceMode?: 'direct' | 'operator' | 'supervisor'
+  agentBackend?: 'pi' | 'openai' | 'hermes'
 }
 
 export interface TextChatCallbacks {
@@ -64,6 +66,8 @@ export function streamTextChat(
       deviceContext: opts.deviceContext,
       instructionsOverride: opts.instructionsOverride,
       conversationHistory: opts.conversationHistory,
+      voiceMode: opts.voiceMode,
+      agentBackend: opts.agentBackend,
     }))
   }
 

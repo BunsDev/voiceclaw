@@ -12,9 +12,6 @@ web-build/
 /ios/
 /android/
 
-# Vendored native frameworks (downloaded via scripts/download-daily-sdk.sh)
-modules/expo-vapi/ios/Frameworks/Daily.xcframework/
-
 # Swift Package Manager build artifacts
 native-packages/**/.build/
 native-packages/**/Package.resolved

@@ -9,6 +9,8 @@ type Props = {
   onStartOver?: () => void
   initialSignedIn?: boolean
   previewMode?: boolean
+  stepNumber?: number
+  totalSteps?: number
 }
 
 type SignInState =
@@ -24,6 +26,8 @@ export function StepSignIn({
   onStartOver,
   initialSignedIn = false,
   previewMode = false,
+  stepNumber = 2,
+  totalSteps = 6,
 }: Props) {
   const [state, setState] = useState<SignInState>(
     initialSignedIn ? { kind: 'success', user: null } : { kind: 'idle' },
@@ -63,9 +67,9 @@ export function StepSignIn({
 
   return (
     <StepFrame
-      stepIndex={2}
-      totalSteps={6}
-      eyebrow="02 / Sign in"
+      stepIndex={stepNumber}
+      totalSteps={totalSteps}
+      eyebrow={`${String(stepNumber).padStart(2, '0')} / Sign in`}
       title="Tell us where to find you."
       description="We use your email to send build updates and reach out when something breaks. Not for marketing, not for training. If you'd rather keep things anonymous, skip this — it's safe."
       primaryAction={{

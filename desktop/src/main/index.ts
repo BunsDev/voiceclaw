@@ -44,6 +44,7 @@ import {
   startBundledOpenClaw,
 } from './services/openclaw-gateway'
 import { startBundledRelayServer } from './services/relay-server'
+import { startDeviceTokenBridge, stopDeviceTokenBridge } from './services/device-token-bridge'
 import { ensureDefault as ensureLaunchAtLoginDefault } from './login-items'
 import { initAutoUpdater } from './updater'
 import { setRebuildTray } from './services/auto-updater'
@@ -252,8 +253,15 @@ app.whenReady().then(async () => {
 
   // Best-effort spawn of bundled services. Missing binary is fine in dev.
   // Sequenced so the openclaw config (with its baked auth token) is on
-  // disk before the relay reads it for BRAIN_GATEWAY_AUTH_TOKEN.
-  startBundledOpenClaw()
+  // disk before the relay reads it for BRAIN_GATEWAY_AUTH_TOKEN, and the
+  // device-token bridge is up before the relay reads its URL/nonce in
+  // buildRelayEnv().
+  startDeviceTokenBridge()
+    .catch((err) => {
+      console.warn('[device-token-bridge] failed to start', err)
+      captureException(err, { source: 'startDeviceTokenBridge' })
+    })
+    .then(() => startBundledOpenClaw())
     .catch((err) => {
       console.warn('[openclaw] failed to start', err)
       captureException(err, { source: 'startBundledOpenClaw' })
@@ -314,6 +322,9 @@ app.on('will-quit', () => {
   destroyCallBar()
   destroyDrawOverlay()
   destroyTray()
+  // Fire-and-forget — process is about to exit, the close callback
+  // running or not won't change correctness.
+  void stopDeviceTokenBridge()
   closeDb()
 })
 

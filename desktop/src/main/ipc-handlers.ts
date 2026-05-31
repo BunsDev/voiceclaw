@@ -12,7 +12,14 @@ import {
 import { getDb } from './db'
 import { isLaunchAtLoginEnabled, setLaunchAtLogin } from './login-items'
 import { serviceManager } from './services/service-manager'
-import { buildRelayEnv } from './services/relay-server'
+import { buildRelayEnv, getTailnetUrl } from './services/relay-server'
+import {
+  createDeviceToken,
+  listDeviceTokens,
+  removeDeviceToken,
+  renameDeviceToken,
+  revokeDeviceToken,
+} from './device-tokens'
 import { applyGeminiKeyToOpenClawConfig } from './services/openclaw-gateway'
 import { buildDiagnosticBundle } from './services/diagnostic-bundle'
 import {
@@ -589,6 +596,76 @@ export function registerIpcHandlers() {
   ipcMain.handle('shell:openExternal', (_e, url: string) => {
     if (typeof url === 'string' && /^https?:\/\//.test(url)) {
       return shell.openExternal(url)
+    }
+  })
+
+  // Per-device pairing tokens. The renderer never sees the SQLite hash —
+  // only the plaintext that ships in the QR (and only at create time).
+  ipcMain.handle('devices:create', (_e, params: { label?: unknown }) => {
+    const label = typeof params?.label === 'string' ? params.label : ''
+    try {
+      const created = createDeviceToken(label)
+      const url = getTailnetUrl()
+      const payload = {
+        v: 1 as const,
+        url: url ?? '',
+        token: created.plaintext,
+        label: created.label,
+      }
+      return {
+        ok: true as const,
+        id: created.id,
+        label: created.label,
+        payload,
+        plaintext: created.plaintext,
+        hasNetwork: url !== null,
+      }
+    } catch (err) {
+      return {
+        ok: false as const,
+        error: err instanceof Error ? err.message : 'Could not create device token.',
+      }
+    }
+  })
+  ipcMain.handle('devices:list', () => listDeviceTokens())
+  ipcMain.handle('devices:revoke', (_e, params: { id?: unknown }) => {
+    const id = typeof params?.id === 'string' ? params.id : ''
+    if (!id) return { ok: false as const, error: 'Missing device id.' }
+    try {
+      revokeDeviceToken(id)
+      return { ok: true as const }
+    } catch (err) {
+      return {
+        ok: false as const,
+        error: err instanceof Error ? err.message : 'Could not revoke device.',
+      }
+    }
+  })
+  ipcMain.handle('devices:rename', (_e, params: { id?: unknown; label?: unknown }) => {
+    const id = typeof params?.id === 'string' ? params.id : ''
+    const label = typeof params?.label === 'string' ? params.label : ''
+    if (!id) return { ok: false as const, error: 'Missing device id.' }
+    try {
+      renameDeviceToken(id, label)
+      return { ok: true as const }
+    } catch (err) {
+      return {
+        ok: false as const,
+        error: err instanceof Error ? err.message : 'Could not rename device.',
+      }
+    }
+  })
+  ipcMain.handle('devices:remove', (_e, params: { id?: unknown }) => {
+    const id = typeof params?.id === 'string' ? params.id : ''
+    if (!id) return { ok: false as const, error: 'Missing device id.' }
+    try {
+      removeDeviceToken(id)
+      return { ok: true as const }
+    } catch (err) {
+      return {
+        ok: false as const,
+        error: err instanceof Error ? err.message : 'Could not remove device.',
+      }
     }
   })
 

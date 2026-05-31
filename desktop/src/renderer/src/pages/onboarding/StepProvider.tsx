@@ -32,6 +32,17 @@ const PROVIDERS: Provider[] = [
     freeTier: 'Free tier available',
   },
   {
+    id: 'openai',
+    name: 'OpenAI Realtime',
+    tagline: 'OpenAI',
+    detail: 'The original realtime voice API. Rich tool support, predictable behavior.',
+    keyLink: 'https://platform.openai.com/api-keys',
+    keyLinkLabel: 'Get a key at platform.openai.com',
+    placeholder: 'sk-...',
+    prefix: 'OPENAI',
+    freeTier: 'Pay-as-you-go',
+  },
+  {
     id: 'xai',
     name: 'Grok Voice',
     tagline: 'xAI',
@@ -57,6 +68,8 @@ type Props = {
   onStartOver?: () => void
   initialProvider?: ProviderId
   previewMode?: boolean
+  stepNumber?: number
+  totalSteps?: number
 }
 
 export function StepProvider({
@@ -65,6 +78,8 @@ export function StepProvider({
   onStartOver,
   initialProvider = 'gemini',
   previewMode = false,
+  stepNumber = 4,
+  totalSteps = 6,
 }: Props) {
   const [selected, setSelected] = useState<ProviderId>(
     PROVIDERS.some((p) => p.id === initialProvider) ? initialProvider : 'gemini',
@@ -127,9 +142,9 @@ export function StepProvider({
 
   return (
     <StepFrame
-      stepIndex={4}
-      totalSteps={6}
-      eyebrow="04 / Voice provider"
+      stepIndex={stepNumber}
+      totalSteps={totalSteps}
+      eyebrow={`${String(stepNumber).padStart(2, '0')} / Voice provider`}
       title="Pick a voice. Paste a key."
       description="VoiceClaw doesn't keep your key. It goes straight into macOS Keychain on this machine, encrypted the way the OS encrypts your Wi-Fi passwords."
       primaryAction={{

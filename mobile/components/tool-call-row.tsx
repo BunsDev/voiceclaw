@@ -16,7 +16,7 @@ if (Platform.OS === 'android') {
   UIManager.setLayoutAnimationEnabledExperimental?.(true)
 }
 
-export type ToolCallStatus = 'in-progress' | 'success' | 'error' | 'cancelled'
+export type ToolCallStatus = 'in-progress' | 'success' | 'error' | 'cancelled' | 'stopped'
 
 export interface ToolCallItem {
   callId: string
@@ -27,6 +27,8 @@ export interface ToolCallItem {
   durationMs?: number
   result?: string
   error?: string
+  progressText?: string
+  progressStep?: string
 }
 
 interface ToolCallRowProps {
@@ -66,11 +68,14 @@ export function ToolCallRow({ item }: ToolCallRowProps) {
     }
   }, [item.status])
 
+  const hasProgressText = !!item.progressText && item.progressText.length > 0
+  const allowInProgressExpand = item.status === 'in-progress' && hasProgressText
+
   const toggleExpanded = useCallback(() => {
-    if (item.status === 'in-progress') return
+    if (item.status === 'in-progress' && !hasProgressText) return
     LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut)
     setExpanded((v) => !v)
-  }, [item.status])
+  }, [item.status, hasProgressText])
 
   const displayDuration = item.durationMs != null
     ? formatDuration(item.durationMs)
@@ -79,7 +84,10 @@ export function ToolCallRow({ item }: ToolCallRowProps) {
     : null
 
   const argsSummary = summarizeArgs(item.args)
-  const canExpand = item.status !== 'in-progress' && item.status !== 'cancelled'
+  const canExpand =
+    item.status === 'success' ||
+    item.status === 'error' ||
+    allowInProgressExpand
 
   return (
     <Pressable
@@ -138,6 +146,35 @@ export function ToolCallRow({ item }: ToolCallRowProps) {
           </Text>
         ) : null}
 
+        {item.status === 'in-progress' && item.progressStep ? (
+          <Text
+            style={{
+              fontSize: 11,
+              color: palette.muted,
+              fontStyle: 'italic',
+              marginTop: 4,
+            }}
+            numberOfLines={1}
+          >
+            {item.progressStep}
+          </Text>
+        ) : null}
+
+        {item.status === 'in-progress' && !expanded && hasProgressText ? (
+          <Text style={{ fontSize: 11, color: palette.muted, marginTop: 4 }} numberOfLines={1}>
+            ▸ streaming…
+          </Text>
+        ) : null}
+
+        {expanded && hasProgressText && (
+          <ExpandedContent
+            label={item.status === 'in-progress' ? 'Streaming' : 'Progress'}
+            content={item.progressText!}
+            palette={palette}
+            tail
+          />
+        )}
+
         {expanded && item.status === 'success' && item.result != null && (
           <ExpandedContent label="Result" content={item.result} palette={palette} />
         )}
@@ -155,19 +192,29 @@ function ExpandedContent({
   content,
   palette,
   isError = false,
+  tail = false,
 }: {
   label: string
   content: string
   palette: BrandPalette
   isError?: boolean
+  tail?: boolean
 }) {
-  const prettyContent = prettyPrint(content)
+  const scrollRef = useRef<ScrollView | null>(null)
+  const displayContent = tail ? content : prettyPrint(content)
+
+  useEffect(() => {
+    if (!tail) return
+    const id = setTimeout(() => scrollRef.current?.scrollToEnd({ animated: false }), 0)
+    return () => clearTimeout(id)
+  }, [tail, displayContent])
+
   return (
     <View style={{ marginTop: 8, borderTopWidth: 1, borderTopColor: palette.line, paddingTop: 8 }}>
       <Text style={{ fontSize: 10, color: palette.muted, marginBottom: 4, textTransform: 'uppercase', letterSpacing: 0.5 }}>
         {label}
       </Text>
-      <ScrollView style={{ maxHeight: 200 }} nestedScrollEnabled>
+      <ScrollView ref={scrollRef} style={{ maxHeight: 200 }} nestedScrollEnabled>
         <Text
           selectable
           style={{
@@ -177,7 +224,7 @@ function ExpandedContent({
             lineHeight: 16,
           }}
         >
-          {prettyContent}
+          {displayContent}
         </Text>
       </ScrollView>
     </View>
@@ -188,7 +235,7 @@ function StatusIcon({ status, palette }: { status: ToolCallStatus, palette: Bran
   if (status === 'in-progress') {
     return <ActivityIndicator size="small" color={palette.muted} style={{ width: 16, height: 16 }} />
   }
-  const icon = status === 'success' ? '✓' : status === 'error' ? '✕' : '—'
+  const icon = status === 'success' ? '✓' : status === 'error' ? '✕' : status === 'stopped' ? '◼' : '—'
   const color = status === 'success' ? palette.sage : status === 'error' ? palette.destructive : palette.muted
   return (
     <Text style={{ fontSize: 13, color, fontWeight: '600', width: 16, textAlign: 'center' }}>

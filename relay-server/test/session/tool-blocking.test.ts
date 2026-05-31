@@ -7,7 +7,7 @@ import { W3CTraceContextPropagator } from "@opentelemetry/core"
 import { AsyncHooksContextManager } from "@opentelemetry/context-async-hooks"
 import { RelaySession } from "../../src/session.js"
 import type { AdapterCapabilities, ProviderAdapter } from "../../src/adapters/types.js"
-import { findRelayTool } from "../../src/tools/index.js"
+import { findRelayTool, isBlockingLatencyClass } from "../../src/tools/index.js"
 import type { RelayEvent, SessionConfigEvent } from "../../src/types.js"
 
 interface CapturedAdapterCalls {
@@ -130,18 +130,25 @@ describe("session tool-call blocking dispatch", () => {
     expect(calls.injectContext[0]).toContain("fallback works")
   })
 
-  it("web_search is registered as blocking", () => {
+  it("web_search is registered as medium latency (blocking)", () => {
     const config = makeConfig({ tavilyApiKey: "tvly-test" })
     const tool = findRelayTool(config, "web_search")
     expect(tool).not.toBeNull()
-    expect(tool?.blocking).toBe(true)
+    expect(tool?.latencyClass).toBe("medium")
+    expect(isBlockingLatencyClass(tool!.latencyClass)).toBe(true)
   })
 
-  it("ask_brain is registered as non-blocking", () => {
+  it("ask_brain is not registered in direct-tools mode", () => {
     const config = makeConfig({})
-    const tool = findRelayTool(config, "ask_brain")
+    expect(findRelayTool(config, "ask_brain")).toBeNull()
+  })
+
+  it("echo_tool is registered as fast latency (blocking)", () => {
+    const config = makeConfig({})
+    const tool = findRelayTool(config, "echo_tool")
     expect(tool).not.toBeNull()
-    expect(tool?.blocking).toBe(false)
+    expect(tool?.latencyClass).toBe("fast")
+    expect(isBlockingLatencyClass(tool!.latencyClass)).toBe(true)
   })
 
   it("blocking ask_brain (config-driven override): abort sends cancellation result", async () => {

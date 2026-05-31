@@ -1,13 +1,14 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import type { UpdateState } from '../lib/db'
-import { Wifi, WifiOff, Eye, EyeOff, Play } from 'lucide-react'
+import { Eye, EyeOff, Play } from 'lucide-react'
 import { Button } from '../components/ui/Button'
 import { Card } from '../components/ui/Card'
 import { Input } from '../components/ui/Input'
 import { Select } from '../components/ui/Select'
 import { Toggle } from '../components/ui/Toggle'
+import { DevicesCard } from '../components/DevicesCard'
 import { ShortcutsCard } from '../components/ShortcutsCard'
-import { identityApi, onboarding } from '../lib/onboarding-api'
+import { identityApi, onboarding, providerApi, type ProviderId } from '../lib/onboarding-api'
 import { decodeVoicePreviewAudio } from '../lib/voice-preview'
 import { useTheme, type Theme } from '../lib/use-theme'
 import { enumerateAudioDevices, type AudioDevice } from '../lib/audio-engine'
@@ -66,6 +67,27 @@ type RealtimeModel =
   | 'gpt-realtime-mini'
 const DEFAULT_REALTIME_MODEL: RealtimeModel = 'gemini-3.1-flash-live-preview'
 
+// Mirror of the relay-server VoiceMode / AgentBackend enums. Persisted in
+// the desktop settings KV; the literal strings cross the wire as
+// session.config.voiceMode / session.config.agentBackend.
+type VoiceMode = 'direct' | 'operator' | 'supervisor'
+const VOICE_MODES: readonly VoiceMode[] = ['direct', 'operator', 'supervisor']
+const DEFAULT_VOICE_MODE: VoiceMode = 'direct'
+
+type AgentBackend = 'pi' | 'openai' | 'hermes'
+const AGENT_BACKENDS: readonly AgentBackend[] = ['pi', 'openai', 'hermes']
+const DEFAULT_AGENT_BACKEND: AgentBackend = 'pi'
+
+function normalizeVoiceMode(value: string | null): VoiceMode {
+  return VOICE_MODES.includes(value as VoiceMode) ? (value as VoiceMode) : DEFAULT_VOICE_MODE
+}
+
+function normalizeAgentBackend(value: string | null): AgentBackend {
+  return AGENT_BACKENDS.includes(value as AgentBackend)
+    ? (value as AgentBackend)
+    : DEFAULT_AGENT_BACKEND
+}
+
 const REALTIME_MODEL_LABELS: Record<RealtimeModel, string> = {
   'gemini-3.1-flash-live-preview': 'Gemini 3.1 Flash Live',
   'grok-voice-think-fast-1.0': 'Grok Voice Think Fast 1.0',
@@ -80,18 +102,41 @@ const REALTIME_MODELS: readonly RealtimeModel[] = [
   'gpt-realtime-mini',
 ]
 
+const PROVIDER_LABELS: Record<ProviderId, string> = {
+  gemini: 'Gemini',
+  openai: 'OpenAI',
+  xai: 'xAI',
+}
+
+const PROVIDER_DISPLAY_LABELS: Record<ProviderId, string> = {
+  gemini: 'Google',
+  openai: 'OpenAI',
+  xai: 'xAI',
+}
+
+const PROVIDER_KEY_META: Record<
+  ProviderId,
+  { url: string; linkLabel: string; placeholder: string }
+> = {
+  gemini: {
+    url: 'https://aistudio.google.com/apikey',
+    linkLabel: 'aistudio.google.com',
+    placeholder: 'AIza...',
+  },
+  openai: {
+    url: 'https://platform.openai.com/api-keys',
+    linkLabel: 'platform.openai.com',
+    placeholder: 'sk-...',
+  },
+  xai: {
+    url: 'https://console.x.ai',
+    linkLabel: 'console.x.ai',
+    placeholder: 'xai-...',
+  },
+}
+
 export function SettingsPage() {
   const { theme, setTheme } = useTheme()
-
-  // Connection
-  const [serverUrl, setServerUrl] = useState('')
-  const [serverUrlPlaceholder, setServerUrlPlaceholder] = useState('ws://localhost:8080/ws')
-  const [apiKey, setApiKey] = useState('')
-  const [apiKeyPlaceholder, setApiKeyPlaceholder] = useState('Enter your API key')
-  const [showApiKey, setShowApiKey] = useState(false)
-  const [testStatus, setTestStatus] = useState<'idle' | 'testing' | 'ok' | 'error'>('idle')
-  const [testError, setTestError] = useState('')
-  const [resetting, setResetting] = useState(false)
 
   // Web Search (Tavily) — when enabled AND a key is set, the realtime model
   // gets a fast web_search tool alongside ask_brain. Stored as plain settings
@@ -104,6 +149,18 @@ export function SettingsPage() {
   // Model + Voice
   const [model, setModel] = useState<RealtimeModel>('gemini-3.1-flash-live-preview')
   const [voice, setVoice] = useState<string>('Zephyr')
+
+  // Voice Mode + Agent backend. See VoiceMode / AgentBackend above for the
+  // wire contract. Both are persisted to SQLite settings and forwarded to
+  // the relay in every session.config.
+  const [voiceMode, setVoiceMode] = useState<VoiceMode>(DEFAULT_VOICE_MODE)
+  const [agentBackend, setAgentBackend] = useState<AgentBackend>(DEFAULT_AGENT_BACKEND)
+
+  // Per-provider realtime API keys (Keychain-backed via main process).
+  // We never read the secret back into the UI — only the list of which
+  // providers currently have a key set, so we can render a "configured"
+  // indicator and let the user overwrite.
+  const [configuredProviders, setConfiguredProviders] = useState<ProviderId[]>([])
 
   // Audio
   const [volume, setVolume] = useState(1.0)
@@ -151,22 +208,6 @@ export function SettingsPage() {
   // Load all settings on mount
   useEffect(() => {
     ;(async () => {
-      const url = await getSetting('realtime_server_url')
-      if (url) setServerUrl(url)
-      try {
-        const ports = await window.electronAPI?.app?.getServicePorts?.()
-        const port = ports?.relay
-        if (typeof port === 'number' && port > 0) {
-          setServerUrlPlaceholder(`ws://127.0.0.1:${port}/ws`)
-        }
-      } catch {
-        // Keep the static fallback placeholder.
-      }
-      const key = await getSetting('realtime_api_key')
-      if (key) {
-        setApiKey(key)
-        setApiKeyPlaceholder(maskKey(key))
-      }
       const tk = await getSetting('tavily_api_key')
       if (tk) setTavilyKey(tk)
       // Default to enabled. Only treat the explicit string 'false' as off so
@@ -179,6 +220,10 @@ export function SettingsPage() {
       if (m && m !== loadedModel) setSetting('realtime_model', loadedModel)
       const loadedVoice = await getVoiceForProvider(providerForModel(loadedModel))
       setVoice(loadedVoice)
+      const vm = await getSetting('voice_mode')
+      setVoiceMode(normalizeVoiceMode(vm))
+      const ab = await getSetting('agent_backend')
+      setAgentBackend(normalizeAgentBackend(ab))
       const vol = await getSetting('realtime_volume')
       if (vol) setVolume(parseFloat(vol))
       const inDev = await getSetting('input_device_id')
@@ -209,10 +254,26 @@ export function SettingsPage() {
       const optedOut = await isOptedOutRenderer()
       setTelemetryEnabled(!optedOut)
 
+      try {
+        const configured = await providerApi.listConfigured()
+        setConfiguredProviders(configured)
+      } catch (err) {
+        console.warn('[settings] provider listConfigured failed', err)
+      }
+
       loadedRef.current = true
     })()
 
     enumerateAudioDevices().then(setAudioDevices).catch(console.error)
+  }, [])
+
+  const refreshConfiguredProviders = useCallback(async () => {
+    try {
+      const configured = await providerApi.listConfigured()
+      setConfiguredProviders(configured)
+    } catch (err) {
+      console.warn('[settings] provider listConfigured failed', err)
+    }
   }, [])
 
   useEffect(() => {
@@ -227,24 +288,6 @@ export function SettingsPage() {
   const save = useCallback((key: string, value: string) => {
     setSetting(key, value)
   }, [])
-
-  const updateServerUrl = useCallback((v: string) => {
-    setServerUrl(v)
-    if (loadedRef.current) save('realtime_server_url', v)
-  }, [save])
-
-  const updateApiKey = useCallback((v: string) => {
-    setApiKey(v)
-    if (loadedRef.current) {
-      save('realtime_api_key', v)
-      // Fire only when the user transitions from blank → set, so we
-      // don't spam an event on every keystroke. Provider name only —
-      // the key itself is never included.
-      if (v && !apiKey) {
-        captureRenderer('provider_key_saved', { provider: 'realtime', model })
-      }
-    }
-  }, [save, apiKey, model])
 
   const updateTavilyKey = useCallback((v: string) => {
     setTavilyKey(v)
@@ -279,6 +322,16 @@ export function SettingsPage() {
       void setVoiceForProvider(providerForModel(model), v)
     }
   }, [model])
+
+  const updateVoiceMode = useCallback((v: VoiceMode) => {
+    setVoiceMode(v)
+    if (loadedRef.current) save('voice_mode', v)
+  }, [save])
+
+  const updateAgentBackend = useCallback((v: AgentBackend) => {
+    setAgentBackend(v)
+    if (loadedRef.current) save('agent_backend', v)
+  }, [save])
 
   // Stop + release any in-flight preview clip on unmount.
   useEffect(() => {
@@ -478,55 +531,6 @@ export function SettingsPage() {
     }
   }, [doctorResult])
 
-  const resetBundled = useCallback(async () => {
-    setResetting(true)
-    try {
-      const result = await window.electronAPI?.app?.resetBundledDefaults?.()
-      if (result?.ok) {
-        setApiKey(result.relayApiKey)
-        setApiKeyPlaceholder(maskKey(result.relayApiKey))
-        setSetting('realtime_api_key', result.relayApiKey)
-        setServerUrl('')
-        setSetting('realtime_server_url', '')
-        setTestStatus('idle')
-        setTestError('')
-      }
-    } catch (err) {
-      console.warn('[SettingsPage] resetBundled failed', err)
-    } finally {
-      setResetting(false)
-    }
-  }, [])
-
-  const testConnection = useCallback(async () => {
-    setTestStatus('testing')
-    setTestError('')
-    try {
-      // Pass ws URL directly — main process converts to http and appends /health
-      const result = await window.electronAPI.net.healthCheck(serverUrl)
-      if (result.ok) {
-        setTestStatus('ok')
-        captureRenderer('test_call_completed', { success: true, surface: 'settings' })
-      } else {
-        setTestStatus('error')
-        setTestError(result.error || 'Connection failed')
-        captureRenderer('test_call_completed', {
-          success: false,
-          surface: 'settings',
-          reason: result.error ?? 'unknown',
-        })
-      }
-    } catch (err) {
-      setTestStatus('error')
-      setTestError(err instanceof Error ? err.message : 'Connection failed')
-      captureRenderer('test_call_completed', {
-        success: false,
-        surface: 'settings',
-        reason: err instanceof Error ? err.message : 'unknown',
-      })
-    }
-  }, [serverUrl])
-
   const inputDevices = audioDevices.filter((d) => d.kind === 'audioinput')
   const outputDevices = audioDevices.filter((d) => d.kind === 'audiooutput')
 
@@ -534,55 +538,8 @@ export function SettingsPage() {
     <div className="flex-1 flex flex-col overflow-hidden">
       <div className="flex-1 overflow-y-auto px-4 py-4 space-y-4">
 
-        {/* Connection */}
-        <Card className="p-4 space-y-4">
-          <h3 className="text-sm font-semibold text-foreground">Connection</h3>
-
-          <div className="space-y-1.5">
-            <label className="text-xs text-muted-foreground">Relay Server URL</label>
-            <Input
-              value={serverUrl}
-              onChange={(e) => updateServerUrl(e.target.value)}
-              placeholder={serverUrlPlaceholder}
-            />
-          </div>
-
-          <div className="space-y-1.5">
-            <label className="text-xs text-muted-foreground">API Key</label>
-            <div className="flex gap-2">
-              <div className="flex-1 relative">
-                <Input
-                  type={showApiKey ? 'text' : 'password'}
-                  value={apiKey}
-                  onChange={(e) => updateApiKey(e.target.value)}
-                  placeholder={apiKeyPlaceholder}
-                  className="pr-10"
-                />
-                <button
-                  onClick={() => setShowApiKey(!showApiKey)}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-                >
-                  {showApiKey ? <EyeOff size={16} /> : <Eye size={16} />}
-                </button>
-              </div>
-            </div>
-          </div>
-
-          <ConnectionStatus
-            status={testStatus}
-            error={testError}
-            onTest={testConnection}
-          />
-
-          <div className="flex items-center justify-between text-xs">
-            <span className="text-muted-foreground">
-              Bundled relay running at <code className="rounded bg-muted px-1 py-0.5">{serverUrlPlaceholder}</code>
-            </span>
-            <Button variant="ghost" size="sm" onClick={resetBundled} disabled={resetting}>
-              {resetting ? 'Resetting…' : 'Reset to bundled defaults'}
-            </Button>
-          </div>
-        </Card>
+        {/* Devices */}
+        <DevicesCard />
 
         {/* Identity */}
         <Card className="p-4 space-y-4">
@@ -656,33 +613,19 @@ export function SettingsPage() {
           </div>
         </Card>
 
-        {/* Model */}
-        <Card className="p-4 space-y-4">
-          <h3 className="text-sm font-semibold text-foreground">Model</h3>
-          <div className="space-y-1.5">
-            {REALTIME_MODELS.map((m) => {
-              return (
-                <button
-                  key={m}
-                  onClick={() => updateModel(m)}
-                  className={`w-full flex items-center gap-3 rounded-md border px-3 py-2 text-left transition-colors
-                    ${model === m ? 'border-primary bg-accent' : 'border-input'}
-                    hover:bg-accent cursor-pointer
-                  `}
-                >
-                  <div className={`h-3.5 w-3.5 rounded-full border-2 flex items-center justify-center
-                    ${model === m ? 'border-primary' : 'border-muted-foreground'}
-                  `}>
-                    {model === m && <div className="h-1.5 w-1.5 rounded-full bg-primary" />}
-                  </div>
-                  <span className={`text-sm ${model === m ? 'font-medium text-foreground' : 'text-muted-foreground'}`}>
-                    {REALTIME_MODEL_LABELS[m]}
-                  </span>
-                </button>
-              )
-            })}
-          </div>
-        </Card>
+        {/* Voice Model */}
+        <VoiceModelCard
+          model={model}
+          configuredProviders={configuredProviders}
+          onSelectModel={updateModel}
+          onSaved={refreshConfiguredProviders}
+        />
+
+        {/* Voice Mode */}
+        <VoiceModeCard mode={voiceMode} onSelect={updateVoiceMode} />
+
+        {/* Agent */}
+        <AgentBackendCard backend={agentBackend} onSelect={updateAgentBackend} />
 
         {/* Voice */}
         <Card className="p-4 space-y-4">
@@ -1052,19 +995,6 @@ export function SettingsPage() {
           </div>
         </Card>
 
-        {/* Setup Instructions */}
-        <Card className="p-4 space-y-2 text-xs text-muted-foreground">
-          <p className="font-medium">Setup</p>
-          <p>The relay server runs automatically inside VoiceClaw. The active URL is <code className="rounded bg-muted px-1 py-0.5">{serverUrlPlaceholder}</code> — leave the field above blank to use it. Set a custom URL only if you want to point at an external relay.</p>
-          <details className="pt-1">
-            <summary className="cursor-pointer">Developers: run the relay from source</summary>
-            <ol className="list-decimal list-inside space-y-0.5 pt-1">
-              <li>From the repo root: <code className="rounded bg-muted px-1 py-0.5">cd relay-server && yarn dev</code></li>
-              <li>Paste the printed URL into the field above</li>
-              <li>Click Test to verify the connection</li>
-            </ol>
-          </details>
-        </Card>
 
       </div>
     </div>
@@ -1141,11 +1071,6 @@ function relativeTime(ts: number): string {
   return `${Math.floor(diff / 86400)} days ago`
 }
 
-function maskKey(key: string): string {
-  if (key.length <= 8) return '••••••••'
-  return `${key.slice(0, 4)}…${key.slice(-4)}`
-}
-
 function isRealtimeModel(model: string | null): model is RealtimeModel {
   return REALTIME_MODELS.includes(model as RealtimeModel)
 }
@@ -1214,48 +1139,467 @@ function BrainDoctorPanel({
   )
 }
 
-function ConnectionStatus({
-  status,
-  error,
-  onTest,
+type ProviderKeyStatus =
+  | { kind: 'idle' }
+  | { kind: 'saving' }
+  | { kind: 'saved' }
+  | { kind: 'error'; message: string }
+
+function VoiceModelCard({
+  model,
+  configuredProviders,
+  onSelectModel,
+  onSaved,
 }: {
-  status: 'idle' | 'testing' | 'ok' | 'error'
-  error: string
-  onTest: () => void
+  model: RealtimeModel
+  configuredProviders: ProviderId[]
+  onSelectModel: (m: RealtimeModel) => void
+  onSaved: () => void | Promise<void>
 }) {
+  const [editorAnchor, setEditorAnchor] = useState<RealtimeModel | null>(null)
+
+  const handleSelect = useCallback(
+    (m: RealtimeModel) => {
+      onSelectModel(m)
+      const provider = providerForModel(m)
+      if (!configuredProviders.includes(provider)) {
+        setEditorAnchor(m)
+      } else {
+        setEditorAnchor(null)
+      }
+    },
+    [configuredProviders, onSelectModel],
+  )
+
+  const handleSaved = useCallback(async () => {
+    await onSaved()
+    setEditorAnchor(null)
+  }, [onSaved])
+
   return (
-    <div className={`flex items-center justify-between rounded-md border px-3 py-2
-      ${status === 'ok' ? 'border-[var(--brand-sage)] bg-[var(--brand-sage-wash)]'
-        : status === 'error' ? 'border-destructive/50 bg-destructive/5'
-        : 'border-input'}
-    `}>
-      <div className="flex items-center gap-2">
-        {status === 'testing' ? (
-          <div className="h-4 w-4 border-2 border-muted-foreground border-t-transparent rounded-full animate-spin" />
-        ) : status === 'ok' ? (
-          <Wifi size={16} className="text-[var(--brand-sage)]" />
-        ) : (
-          <WifiOff size={16} className={status === 'error' ? 'text-destructive' : 'text-muted-foreground'} />
-        )}
-        <span className={`text-sm ${
-          status === 'ok' ? 'text-[var(--brand-sage)]'
-          : status === 'error' ? 'text-destructive'
-          : 'text-muted-foreground'
-        }`}>
-          {status === 'ok' ? 'Connected'
-          : status === 'testing' ? 'Testing...'
-          : status === 'error' ? error
-          : 'Not tested'}
-        </span>
+    <Card className="p-4 space-y-4">
+      <h3 className="text-sm font-semibold text-foreground">Voice Model</h3>
+
+      <div className="space-y-1.5" role="radiogroup" aria-label="Voice model">
+        {REALTIME_MODELS.map((m) => {
+          const provider = providerForModel(m)
+          const isConfigured = configuredProviders.includes(provider)
+          const isSelected = model === m
+          const isEditorOpen = editorAnchor === m
+          return (
+            <div key={m}>
+              <ModelRow
+                model={m}
+                selected={isSelected}
+                provider={provider}
+                configured={isConfigured}
+                onSelect={() => handleSelect(m)}
+                onOpenEditor={() => setEditorAnchor(m)}
+              />
+              {isEditorOpen && (
+                <InlineKeyEditor
+                  provider={provider}
+                  configured={isConfigured}
+                  requiredForModel={
+                    isSelected && !isConfigured ? REALTIME_MODEL_LABELS[m] : null
+                  }
+                  onSaved={handleSaved}
+                  onClose={() => setEditorAnchor(null)}
+                />
+              )}
+            </div>
+          )
+        })}
       </div>
-      <Button
-        variant="ghost"
-        size="sm"
-        onClick={onTest}
-        disabled={status === 'testing'}
+
+      <div className="pt-3 border-t border-input space-y-2">
+        <p className="text-[11px] uppercase tracking-wider text-muted-foreground">
+          Key source
+        </p>
+        <div className="grid grid-cols-2 gap-2">
+          <div className="flex items-center gap-2 rounded-md border border-primary bg-accent px-3 py-2">
+            <div className="h-3.5 w-3.5 rounded-full border-2 border-primary flex items-center justify-center">
+              <div className="h-1.5 w-1.5 rounded-full bg-primary" />
+            </div>
+            <span className="text-sm font-medium text-foreground">
+              Use my API keys
+            </span>
+          </div>
+          <div className="flex items-center justify-between gap-2 rounded-md border border-dashed border-input bg-muted/30 px-3 py-2 opacity-60">
+            <div className="flex items-center gap-2">
+              <div className="h-3.5 w-3.5 rounded-full border-2 border-muted-foreground" />
+              <span className="text-sm text-muted-foreground">
+                Managed by VoiceClaw
+              </span>
+            </div>
+            <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
+              Soon
+            </span>
+          </div>
+        </div>
+      </div>
+    </Card>
+  )
+}
+
+function ModelRow({
+  model,
+  selected,
+  provider,
+  configured,
+  onSelect,
+  onOpenEditor,
+}: {
+  model: RealtimeModel
+  selected: boolean
+  provider: ProviderId
+  configured: boolean
+  onSelect: () => void
+  onOpenEditor: () => void
+}) {
+  const handleKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault()
+      onSelect()
+    }
+  }
+  return (
+    <div
+      onClick={onSelect}
+      onKeyDown={handleKeyDown}
+      role="radio"
+      aria-checked={selected}
+      tabIndex={0}
+      className={`w-full flex items-center gap-3 rounded-md border px-3 py-2 transition-colors cursor-pointer
+        ${selected ? 'border-primary bg-accent' : 'border-input'}
+        hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50
+      `}
+    >
+      <div
+        className={`h-3.5 w-3.5 rounded-full border-2 flex items-center justify-center shrink-0
+          ${selected ? 'border-primary' : 'border-muted-foreground'}
+        `}
       >
-        Test
-      </Button>
+        {selected && <div className="h-1.5 w-1.5 rounded-full bg-primary" />}
+      </div>
+
+      <span
+        className={`text-sm flex-1 truncate ${selected ? 'font-medium text-foreground' : 'text-foreground'}`}
+      >
+        {REALTIME_MODEL_LABELS[model]}
+      </span>
+
+      <span className="text-[11px] text-muted-foreground shrink-0">
+        {PROVIDER_DISPLAY_LABELS[provider]}
+      </span>
+
+      {configured ? (
+        <div className="flex items-center gap-2 shrink-0">
+          <span className="text-xs text-[var(--brand-sage)]">✓ Configured</span>
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation()
+              onOpenEditor()
+            }}
+            className="text-[11px] text-muted-foreground underline underline-offset-2 hover:text-foreground"
+          >
+            Manage
+          </button>
+        </div>
+      ) : (
+        <div className="flex items-center gap-2 shrink-0">
+          <span className="text-xs text-amber-600 dark:text-amber-400">
+            Missing key
+          </span>
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation()
+              onOpenEditor()
+            }}
+            className="rounded-md border border-input bg-background px-2 py-0.5 text-[11px] font-medium text-foreground hover:bg-muted"
+          >
+            Add key
+          </button>
+        </div>
+      )}
     </div>
   )
 }
+
+const VOICE_MODE_META: Record<
+  VoiceMode,
+  { label: string; helper: string; comingSoon?: boolean }
+> = {
+  direct: {
+    label: 'Direct',
+    helper: 'The assistant uses tools directly — read, write, edit, bash, web search. Lowest latency.',
+  },
+  operator: {
+    label: 'Operator',
+    helper: 'Delegates to your agent (the classic ask_brain flow). Best for multi-step tasks and personal memory.',
+  },
+  supervisor: {
+    label: 'Supervisor',
+    helper: 'A supervisor agent keeps the conversation on track — coming soon. Behaves like Direct today.',
+    comingSoon: true,
+  },
+}
+
+function VoiceModeCard({
+  mode,
+  onSelect,
+}: {
+  mode: VoiceMode
+  onSelect: (m: VoiceMode) => void
+}) {
+  return (
+    <Card className="p-4 space-y-4">
+      <div>
+        <h3 className="text-sm font-semibold text-foreground">Voice Mode</h3>
+        <p className="text-xs text-muted-foreground mt-1">
+          How the realtime model gets its capabilities.
+        </p>
+      </div>
+
+      <div className="space-y-1.5" role="radiogroup" aria-label="Voice mode">
+        {VOICE_MODES.map((m) => (
+          <RadioOptionRow
+            key={m}
+            selected={mode === m}
+            label={VOICE_MODE_META[m].label}
+            helper={VOICE_MODE_META[m].helper}
+            badge={VOICE_MODE_META[m].comingSoon ? 'coming soon' : null}
+            onSelect={() => onSelect(m)}
+          />
+        ))}
+      </div>
+    </Card>
+  )
+}
+
+const AGENT_BACKEND_META: Record<
+  AgentBackend,
+  { label: string; helper: string }
+> = {
+  pi: {
+    label: 'PI',
+    helper: 'Pi Mono harness running locally. Default. Requires the pi CLI on PATH.',
+  },
+  openai: {
+    label: 'OpenAI',
+    helper: 'OpenAI Codex CLI. Requires the codex CLI on PATH.',
+  },
+  hermes: {
+    label: 'Hermes',
+    helper: 'Hermes agent. Requires the hermes CLI on PATH.',
+  },
+}
+
+function AgentBackendCard({
+  backend,
+  onSelect,
+}: {
+  backend: AgentBackend
+  onSelect: (b: AgentBackend) => void
+}) {
+  return (
+    <Card className="p-4 space-y-4">
+      <div>
+        <h3 className="text-sm font-semibold text-foreground">Agent</h3>
+        <p className="text-xs text-muted-foreground mt-1">
+          Which agent runs your tasks. Must be installed on this machine.
+        </p>
+      </div>
+
+      <div className="space-y-1.5" role="radiogroup" aria-label="Agent backend">
+        {AGENT_BACKENDS.map((b) => (
+          <RadioOptionRow
+            key={b}
+            selected={backend === b}
+            label={AGENT_BACKEND_META[b].label}
+            helper={AGENT_BACKEND_META[b].helper}
+            onSelect={() => onSelect(b)}
+          />
+        ))}
+      </div>
+    </Card>
+  )
+}
+
+function RadioOptionRow({
+  selected,
+  label,
+  helper,
+  badge,
+  onSelect,
+}: {
+  selected: boolean
+  label: string
+  helper: string
+  badge?: string | null
+  onSelect: () => void
+}) {
+  const handleKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault()
+      onSelect()
+    }
+  }
+  return (
+    <div
+      onClick={onSelect}
+      onKeyDown={handleKeyDown}
+      role="radio"
+      aria-checked={selected}
+      tabIndex={0}
+      className={`w-full flex items-start gap-3 rounded-md border px-3 py-2 transition-colors cursor-pointer
+        ${selected ? 'border-primary bg-accent' : 'border-input'}
+        hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50
+      `}
+    >
+      <div
+        className={`mt-1 h-3.5 w-3.5 rounded-full border-2 flex items-center justify-center shrink-0
+          ${selected ? 'border-primary' : 'border-muted-foreground'}
+        `}
+      >
+        {selected && <div className="h-1.5 w-1.5 rounded-full bg-primary" />}
+      </div>
+
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-2">
+          <span className={`text-sm ${selected ? 'font-medium text-foreground' : 'text-foreground'}`}>
+            {label}
+          </span>
+          {badge && (
+            <span className="text-[10px] uppercase tracking-wider rounded bg-muted px-1.5 py-0.5 text-muted-foreground">
+              {badge}
+            </span>
+          )}
+        </div>
+        <p className="text-[11px] text-muted-foreground mt-0.5">{helper}</p>
+      </div>
+    </div>
+  )
+}
+
+function InlineKeyEditor({
+  provider,
+  configured,
+  requiredForModel,
+  onSaved,
+  onClose,
+}: {
+  provider: ProviderId
+  configured: boolean
+  requiredForModel: string | null
+  onSaved: () => void | Promise<void>
+  onClose: () => void
+}) {
+  const [key, setKey] = useState('')
+  const [show, setShow] = useState(false)
+  const [status, setStatus] = useState<ProviderKeyStatus>({ kind: 'idle' })
+  const meta = PROVIDER_KEY_META[provider]
+  const providerLabel = PROVIDER_LABELS[provider]
+
+  const handleSave = useCallback(async () => {
+    if (key.length < 8) {
+      setStatus({ kind: 'error', message: 'Key looks too short.' })
+      return
+    }
+    setStatus({ kind: 'saving' })
+    try {
+      const result = await providerApi.validateAndSave(provider, key)
+      if (result.ok) {
+        setStatus({ kind: 'saved' })
+        setKey('')
+        setShow(false)
+        captureRenderer('provider_key_saved', { provider, surface: 'settings' })
+        await onSaved()
+      } else {
+        setStatus({ kind: 'error', message: result.error })
+      }
+    } catch (err) {
+      setStatus({
+        kind: 'error',
+        message: err instanceof Error ? err.message : 'Validation failed.',
+      })
+    }
+  }, [provider, key, onSaved])
+
+  return (
+    <div className="mt-1.5 ml-6 mr-0 rounded-md border border-input bg-muted/30 p-3 space-y-2">
+      <div className="flex items-center justify-between gap-2">
+        <label className="text-xs font-medium text-foreground">
+          {providerLabel} API key
+        </label>
+        <button
+          type="button"
+          onClick={onClose}
+          className="text-[11px] text-muted-foreground hover:text-foreground"
+        >
+          Cancel
+        </button>
+      </div>
+
+      {requiredForModel && (
+        <p className="text-[11px] text-amber-600 dark:text-amber-400">
+          {providerLabel} key required to use {requiredForModel}.
+        </p>
+      )}
+
+      <div className="flex gap-2">
+        <div className="flex-1 relative">
+          <Input
+            type={show ? 'text' : 'password'}
+            value={key}
+            onChange={(e) => {
+              setKey(e.target.value)
+              if (status.kind !== 'idle') setStatus({ kind: 'idle' })
+            }}
+            placeholder={configured ? '••••••••  (replace to update)' : meta.placeholder}
+            className="pr-10"
+            autoFocus
+          />
+          <button
+            type="button"
+            onClick={() => setShow((v) => !v)}
+            aria-label={show ? 'Hide key' : 'Show key'}
+            className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+          >
+            {show ? <EyeOff size={16} /> : <Eye size={16} />}
+          </button>
+        </div>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => void handleSave()}
+          disabled={status.kind === 'saving' || key.length === 0}
+        >
+          {status.kind === 'saving' ? 'Checking…' : 'Validate + save'}
+        </Button>
+      </div>
+
+      <div className="flex items-center justify-between gap-2">
+        <a
+          href={meta.url}
+          target="_blank"
+          rel="noreferrer"
+          className="text-[11px] text-muted-foreground underline underline-offset-2 hover:text-foreground"
+        >
+          Get a key at {meta.linkLabel}
+        </a>
+        {status.kind === 'saved' && (
+          <span className="text-[11px] text-[var(--brand-sage)]">Key saved.</span>
+        )}
+        {status.kind === 'error' && (
+          <span className="text-[11px] text-destructive" role="alert">
+            {status.message}
+          </span>
+        )}
+      </div>
+    </div>
+  )
+}
+

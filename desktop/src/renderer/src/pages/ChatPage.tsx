@@ -9,6 +9,7 @@ import {
   type MouseEvent,
 } from 'react'
 import {
+  ArrowDown,
   Clock,
   Copy,
   ImagePlus,
@@ -129,6 +130,10 @@ export function ChatPage({ onNavigateToSettings }: ChatPageProps = {}) {
   const [drawMode, setDrawMode] = useState(false)
   const [hasStrokes, setHasStrokes] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
+  const scrollContainerRef = useRef<HTMLDivElement>(null)
+  const isPinnedToBottomRef = useRef(true)
+  const [isPinnedToBottom, setIsPinnedToBottom] = useState(true)
+  const [hasNewWhileUnpinned, setHasNewWhileUnpinned] = useState(false)
   const activeRelayUrlRef = useRef<string>('')
   const brainCallStartRef = useRef<Map<string, number>>(new Map())
   const textChatCancelRef = useRef<(() => void) | null>(null)
@@ -206,9 +211,35 @@ export function ChatPage({ onNavigateToSettings }: ChatPageProps = {}) {
     setShowTimes((v) => !v)
   }, [])
 
-  // Auto-scroll to bottom on new messages
+  const scrollToBottom = useCallback((behavior: ScrollBehavior = 'smooth') => {
+    const el = scrollContainerRef.current
+    if (!el) return
+    el.scrollTo({ top: el.scrollHeight, behavior })
+    isPinnedToBottomRef.current = true
+    setIsPinnedToBottom(true)
+    setHasNewWhileUnpinned(false)
+  }, [])
+
+  // Pin-to-bottom: re-anchor only when the user is already at the bottom.
+  // Scrolling up parks the viewport so streaming output doesn't yank it down.
+  const handleTranscriptScroll = useCallback(() => {
+    const el = scrollContainerRef.current
+    if (!el) return
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight
+    const pinned = distanceFromBottom <= 40
+    if (pinned !== isPinnedToBottomRef.current) {
+      isPinnedToBottomRef.current = pinned
+      setIsPinnedToBottom(pinned)
+      if (pinned) setHasNewWhileUnpinned(false)
+    }
+  }, [])
+
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+    if (isPinnedToBottomRef.current) {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+    } else {
+      setHasNewWhileUnpinned(true)
+    }
   }, [messages, toolCalls, streamingText, isThinking])
 
   // Load conversation when selected from History tab
@@ -427,6 +458,8 @@ export function ChatPage({ onNavigateToSettings }: ChatPageProps = {}) {
     const tracingEnabled = (await getSetting('tracing_enabled')) === 'true'
     const inputDeviceId = (await getSetting('input_device_id')) || undefined
     const outputDeviceId = (await getSetting('output_device_id')) || undefined
+    const voiceMode = normalizeVoiceMode(await getSetting('voice_mode'))
+    const agentBackend = normalizeAgentBackend(await getSetting('agent_backend'))
 
     const convId = conversationIdRef.current
     const conversationHistory = convId
@@ -458,6 +491,8 @@ export function ChatPage({ onNavigateToSettings }: ChatPageProps = {}) {
       },
       conversationHistory: conversationHistory.length > 0 ? conversationHistory : undefined,
       tracingEnabled,
+      voiceMode,
+      agentBackend,
     })
   }, [realtime, outputGain])
 
@@ -606,6 +641,8 @@ export function ChatPage({ onNavigateToSettings }: ChatPageProps = {}) {
     const tavilyApiKey = tavilyEnabled
       ? ((await getSetting('tavily_api_key')) || undefined)
       : undefined
+    const voiceMode = normalizeVoiceMode(await getSetting('voice_mode'))
+    const agentBackend = normalizeAgentBackend(await getSetting('agent_backend'))
     const recent = (await getMessages(convId))
       .filter((m) => m.role === 'user' || m.role === 'assistant')
       .slice(-20, -1)
@@ -631,6 +668,8 @@ export function ChatPage({ onNavigateToSettings }: ChatPageProps = {}) {
       images: attachmentsToSend.length > 0
         ? attachmentsToSend.map((p) => ({ base64: p.base64, mimeType: p.mime }))
         : undefined,
+      voiceMode,
+      agentBackend,
     }, {
       onToken: (full) => {
         setIsThinking(false)
@@ -1040,7 +1079,12 @@ export function ChatPage({ onNavigateToSettings }: ChatPageProps = {}) {
       </div>
 
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto overflow-x-hidden px-4 py-4">
+      <div className="flex-1 relative min-h-0">
+        <div
+          ref={scrollContainerRef}
+          onScroll={handleTranscriptScroll}
+          className="absolute inset-0 overflow-y-auto overflow-x-hidden px-4 py-4"
+        >
         {messages.length === 0 && !isCallActive && (
           <div className="flex h-full flex-col items-center justify-center text-center text-muted-foreground">
             <div className="mb-5 flex size-16 items-center justify-center rounded-md border border-border bg-card text-foreground vc-panel-shadow">
@@ -1103,6 +1147,17 @@ export function ChatPage({ onNavigateToSettings }: ChatPageProps = {}) {
           </div>
         )}
         <div ref={messagesEndRef} />
+        </div>
+        {!isPinnedToBottom && hasNewWhileUnpinned && (
+          <button
+            type="button"
+            onClick={() => scrollToBottom('smooth')}
+            className="absolute bottom-3 right-4 flex items-center gap-1.5 rounded-full border border-border bg-card/95 backdrop-blur px-3 py-1.5 text-xs text-foreground shadow-md hover:bg-card transition-colors"
+          >
+            <ArrowDown size={12} />
+            Jump to latest
+          </button>
+        )}
       </div>
 
       {/* Context usage debug strip */}
@@ -1388,6 +1443,26 @@ function normalizeRealtimeModel(model: string | null): typeof REALTIME_MODELS[nu
   return (REALTIME_MODELS as readonly string[]).includes(model ?? '')
     ? model as typeof REALTIME_MODELS[number]
     : DEFAULT_REALTIME_MODEL
+}
+
+const VOICE_MODES = ['direct', 'operator', 'supervisor'] as const
+type VoiceMode = typeof VOICE_MODES[number]
+const DEFAULT_VOICE_MODE: VoiceMode = 'direct'
+
+function normalizeVoiceMode(value: string | null): VoiceMode {
+  return (VOICE_MODES as readonly string[]).includes(value ?? '')
+    ? (value as VoiceMode)
+    : DEFAULT_VOICE_MODE
+}
+
+const AGENT_BACKENDS = ['pi', 'openai', 'hermes'] as const
+type AgentBackend = typeof AGENT_BACKENDS[number]
+const DEFAULT_AGENT_BACKEND: AgentBackend = 'pi'
+
+function normalizeAgentBackend(value: string | null): AgentBackend {
+  return (AGENT_BACKENDS as readonly string[]).includes(value ?? '')
+    ? (value as AgentBackend)
+    : DEFAULT_AGENT_BACKEND
 }
 
 function hasFilePayload(e: DragEvent<HTMLDivElement>): boolean {

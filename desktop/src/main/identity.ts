@@ -1,6 +1,7 @@
 import { app, net } from 'electron'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
 import { readFile } from 'node:fs/promises'
+import { homedir } from 'node:os'
 import { join } from 'path'
 import { providerForVoice, type ProviderId } from './voice-prefs'
 
@@ -17,12 +18,39 @@ export const DEFAULT_IDENTITY: AgentIdentity = {
 }
 
 export function getWorkspaceDir(): string {
-  return join(app.getPath('userData'), 'openclaw', 'workspace')
+  const override = process.env.VOICECLAW_WORKSPACE?.trim()
+  if (override) return override
+  return join(homedir(), '.voiceclaw', 'workspace')
 }
 
 export function getIdentityPath(): string {
   return join(getWorkspaceDir(), 'IDENTITY.md')
 }
+
+export function getSoulPath(): string {
+  return join(getWorkspaceDir(), 'SOUL.md')
+}
+
+const DEFAULT_SOUL_MD = `# SOUL.md - Who You Are
+
+## Core Truths
+- Be genuinely helpful, not performatively helpful. Skip filler and just help.
+- Have opinions. You're allowed to disagree, push back, and react like a person.
+- Match the user's energy. Playful when they are; focused when they are.
+
+## Boundaries
+- Private things stay private. Never repeat sensitive details unprompted.
+- When in doubt, ask before acting on the user's behalf.
+
+## Vibe
+- Calm, present, and direct. Warm without being syrupy.
+- Your role is presence, clarity, and everyday support — not performance.
+- For low-risk tasks, be fluid and fast. For high-risk ones, slow down and verify.
+
+## Continuity
+- These files are your memory. Update FACTS.md when you learn something
+  durable about the user; record session notes in today's memory file.
+`
 
 export function readAgentIdentity(): AgentIdentity {
   const path = getIdentityPath()
@@ -49,6 +77,10 @@ export function writeAgentIdentity(identity: Partial<AgentIdentity>): AgentIdent
   const dir = getWorkspaceDir()
   mkdirSync(dir, { recursive: true })
   writeFileSync(getIdentityPath(), renderIdentityMarkdown(merged), { mode: 0o600 })
+  const soulPath = getSoulPath()
+  if (!existsSync(soulPath)) {
+    writeFileSync(soulPath, DEFAULT_SOUL_MD, { mode: 0o600 })
+  }
   return merged
 }
 

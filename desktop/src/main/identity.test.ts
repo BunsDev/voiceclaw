@@ -1,4 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
+
+const VOICECLAW_WORKSPACE = join(homedir(), '.voiceclaw', 'workspace')
+const IDENTITY_PATH = join(VOICECLAW_WORKSPACE, 'IDENTITY.md')
+const SOUL_PATH = join(VOICECLAW_WORKSPACE, 'SOUL.md')
 
 const writes: { path: string; content: string }[] = []
 const fileSystem = new Map<string, string>()
@@ -57,10 +63,18 @@ describe('writeAgentIdentity', () => {
   beforeEach(() => {
     writes.length = 0
     fileSystem.clear()
+    delete process.env.VOICECLAW_WORKSPACE
   })
 
   afterEach(() => {
     vi.resetModules()
+  })
+
+  it('writes IDENTITY.md to ~/.voiceclaw/workspace/', async () => {
+    const { writeAgentIdentity } = await import('./identity')
+    writeAgentIdentity({ name: 'Pam', description: 'Friendly.', voice: 'Aoede' })
+    const identityWrite = writes.find((w) => w.path === IDENTITY_PATH)
+    expect(identityWrite).toBeDefined()
   })
 
   it('renders all four required fields with the user-supplied values', async () => {
@@ -73,10 +87,11 @@ describe('writeAgentIdentity', () => {
     expect(result.name).toBe('Pam')
     expect(result.description).toBe('Friendly and calm.')
     expect(result.voice).toBe('Aoede')
-    expect(writes[0].content).toContain('**Name:** Pam')
-    expect(writes[0].content).toContain('**Vibe:** Friendly and calm.')
-    expect(writes[0].content).toContain('**Voice:** Aoede')
-    expect(writes[0].content).toContain('**Creature:** Personal voice companion')
+    const identityWrite = writes.find((w) => w.path === IDENTITY_PATH)
+    expect(identityWrite?.content).toContain('**Name:** Pam')
+    expect(identityWrite?.content).toContain('**Vibe:** Friendly and calm.')
+    expect(identityWrite?.content).toContain('**Voice:** Aoede')
+    expect(identityWrite?.content).toContain('**Creature:** Personal voice companion')
   })
 
   it('falls back to defaults when fields are blank', async () => {
@@ -85,7 +100,8 @@ describe('writeAgentIdentity', () => {
     expect(result.name).toBe(DEFAULT_IDENTITY.name)
     expect(result.description).toBe(DEFAULT_IDENTITY.description)
     expect(result.voice).toBe(DEFAULT_IDENTITY.voice)
-    expect(writes[0].content).toContain(`**Name:** ${DEFAULT_IDENTITY.name}`)
+    const identityWrite = writes.find((w) => w.path === IDENTITY_PATH)
+    expect(identityWrite?.content).toContain(`**Name:** ${DEFAULT_IDENTITY.name}`)
   })
 
   it('trims whitespace and tolerates partial patches', async () => {
@@ -94,6 +110,32 @@ describe('writeAgentIdentity', () => {
     expect(result.name).toBe('Beatrix')
     expect(result.voice).toBe('Kore')
     expect(result.description).toBe(DEFAULT_IDENTITY.description)
+  })
+
+  it('seeds a default SOUL.md alongside IDENTITY.md when no SOUL.md exists', async () => {
+    const { writeAgentIdentity } = await import('./identity')
+    writeAgentIdentity({ name: 'Pam' })
+    const soulWrite = writes.find((w) => w.path === SOUL_PATH)
+    expect(soulWrite).toBeDefined()
+    expect(soulWrite?.content).toContain('## Core Truths')
+    expect(soulWrite?.content).toContain('## Vibe')
+    expect(soulWrite?.content).toContain('## Continuity')
+  })
+
+  it('does not overwrite an existing SOUL.md', async () => {
+    fileSystem.set(SOUL_PATH, '# CUSTOM SOUL — keep me\n')
+    const { writeAgentIdentity } = await import('./identity')
+    writeAgentIdentity({ name: 'Pam' })
+    const soulWrites = writes.filter((w) => w.path === SOUL_PATH)
+    expect(soulWrites).toHaveLength(0)
+    expect(fileSystem.get(SOUL_PATH)).toBe('# CUSTOM SOUL — keep me\n')
+  })
+
+  it('honors VOICECLAW_WORKSPACE override when set', async () => {
+    process.env.VOICECLAW_WORKSPACE = '/tmp/custom-vc-ws'
+    const { writeAgentIdentity } = await import('./identity')
+    writeAgentIdentity({ name: 'Pam' })
+    expect(writes.find((w) => w.path === '/tmp/custom-vc-ws/IDENTITY.md')).toBeDefined()
   })
 })
 
