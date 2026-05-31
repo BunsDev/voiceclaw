@@ -5,7 +5,7 @@ import { request as httpRequest } from 'node:http'
 import { networkInterfaces } from 'node:os'
 import { join } from 'path'
 import { allocatePort, getAllocatedPorts, markAllocatedPort } from '../ports'
-import { getBundledRelayApiKey, getTavilyApiKey } from '../onboarding'
+import { getTavilyApiKey } from '../onboarding'
 import { getProviderKey, type ProviderId } from '../provider-keys'
 import { resolveBundledNode } from './node-runtime'
 import { getDeviceTokenBridge } from './device-token-bridge'
@@ -223,10 +223,6 @@ export function buildRelayEnv(): NodeJS.ProcessEnv {
     const token = readGatewayAuthToken(getOpenClawConfigPath())
     if (token) env.BRAIN_GATEWAY_AUTH_TOKEN = token
   }
-  if (!env.RELAY_API_KEY) {
-    const bundledKey = getBundledRelayApiKey()
-    if (bundledKey) env.RELAY_API_KEY = bundledKey
-  }
   if (!env.BRAIN_GATEWAY_URL) {
     const openclawPort = getAllocatedPorts().openclawGateway
     if (openclawPort) env.BRAIN_GATEWAY_URL = `http://127.0.0.1:${openclawPort}`
@@ -235,15 +231,15 @@ export function buildRelayEnv(): NodeJS.ProcessEnv {
     const stored = getTavilyApiKey()
     if (stored) env.TAVILY_API_KEY = stored
   }
-  // Desktop-managed relay still needs to be reachable on the tailnet so the
-  // paired mobile app can connect. The relay now defaults to 127.0.0.1 to
-  // close the open-WS-on-LAN gap; we re-open it here because the desktop also
-  // ensures RELAY_API_KEY is provisioned in buildRelayEnv (above), so the
-  // tailnet socket is only reachable with the bundled key.
+  // Desktop-managed relay binds 0.0.0.0 so the paired mobile app can reach
+  // it over the tailnet. The relay refuses every WS message that does not
+  // present a valid per-device token (validated via the localhost bridge
+  // below) — there is no master-key shortcut anymore.
   if (!env.RELAY_BIND_HOST) env.RELAY_BIND_HOST = "0.0.0.0"
   // Per-device token validation runs through the localhost bridge owned by
-  // the desktop main process. Missing env vars => the relay falls back to
-  // the master-key path only (which is what standalone `yarn dev` wants).
+  // the desktop main process. Missing env vars => the relay has no way to
+  // validate any inbound credential; it will only accept connections under
+  // RELAY_ALLOW_UNAUTHENTICATED=true (i.e. `yarn dev` standalone).
   const bridge = getDeviceTokenBridge()
   if (bridge) {
     if (!env.VOICECLAW_DEVICE_TOKEN_CHECK_URL) env.VOICECLAW_DEVICE_TOKEN_CHECK_URL = bridge.url
@@ -312,7 +308,6 @@ const FORWARDED_KEYS = [
   'TAVILY_API_KEY',
   'BRAIN_GATEWAY_URL',
   'BRAIN_GATEWAY_AUTH_TOKEN',
-  'RELAY_API_KEY',
   'RELAY_BIND_HOST',
   'RELAY_ALLOW_UNAUTHENTICATED',
   'LANGFUSE_PUBLIC_KEY',

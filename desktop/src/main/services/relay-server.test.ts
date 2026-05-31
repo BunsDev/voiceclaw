@@ -4,7 +4,6 @@ const isPackagedRef = { value: false }
 const existsRef = { fn: (_p: string) => false as boolean }
 const tokenRef = { value: null as string | null }
 const providerKeysRef = { fn: (_p: 'gemini' | 'openai' | 'xai') => null as string | null }
-const bundledRelayKeyRef = { value: null as string | null }
 const tavilyKeyRef = { value: null as string | null }
 const allocatedPortsRef: {
   openclawGateway: number | undefined
@@ -36,7 +35,6 @@ vi.mock('../provider-keys', () => ({
 }))
 
 vi.mock('../onboarding', () => ({
-  getBundledRelayApiKey: () => bundledRelayKeyRef.value,
   getTavilyApiKey: () => tavilyKeyRef.value,
 }))
 
@@ -126,7 +124,6 @@ describe('buildRelayEnv', () => {
     delete process.env.TAVILY_API_KEY
     tokenRef.value = null
     providerKeysRef.fn = () => null
-    bundledRelayKeyRef.value = null
     tavilyKeyRef.value = null
     allocatedPortsRef.openclawGateway = undefined
   })
@@ -168,19 +165,13 @@ describe('buildRelayEnv', () => {
     expect(env.BRAIN_GATEWAY_AUTH_TOKEN).toBe('env-token')
   })
 
-  it('injects RELAY_API_KEY from the bundled-defaults store when env is empty', async () => {
-    bundledRelayKeyRef.value = 'shared-secret-uuid'
+  it('no longer forwards RELAY_API_KEY to the bundled relay (master-key tier dropped)', async () => {
+    // Even if the desktop process happens to have RELAY_API_KEY set, we do
+    // not pass it through — the relay's auth gate ignores it anyway.
+    process.env.RELAY_API_KEY = 'should-not-leak'
     const { buildRelayEnv } = await import('./relay-server')
     const env = buildRelayEnv()
-    expect(env.RELAY_API_KEY).toBe('shared-secret-uuid')
-  })
-
-  it('does not override an explicit RELAY_API_KEY env value', async () => {
-    process.env.RELAY_API_KEY = 'env-relay-key'
-    bundledRelayKeyRef.value = 'bundled-uuid'
-    const { buildRelayEnv } = await import('./relay-server')
-    const env = buildRelayEnv()
-    expect(env.RELAY_API_KEY).toBe('env-relay-key')
+    expect(env.RELAY_API_KEY).toBeUndefined()
   })
 
   it('injects BRAIN_GATEWAY_URL from the allocated openclaw port when env is unset', async () => {
